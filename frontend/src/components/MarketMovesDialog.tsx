@@ -157,7 +157,9 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
         setSelectedBoard(null);
         setLeaderResult(null);
         setLeaderError('');
-        setError('暂无可展示的板块异动数据');
+        // 后端返回 error 时说明是数据源问题（如上游限流），
+        // 直接透出原因比笼统的"暂无数据"更有帮助。
+        setError(result?.error ? `数据获取失败：${result.error}` : '暂无可展示的板块异动数据');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : '获取板块异动失败';
@@ -185,7 +187,7 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
       };
       setStockMoves(normalized);
       if (!normalized.items.length) {
-        setStockError('暂无可展示的盘口异动数据');
+        setStockError(result?.error ? `数据获取失败：${result.error}` : '暂无可展示的盘口异动数据');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : '获取盘口异动失败';

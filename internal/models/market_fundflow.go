@@ -25,6 +25,8 @@ type BoardFundFlowList struct {
 	Items      []BoardFundFlowItem `json:"items"`
 	Total      int64               `json:"total,omitempty"`
 	UpdateTime string              `json:"updateTime,omitempty"`
+	// Error 数据获取失败时的原因（如上游数据源限流），供前端提示。
+	Error string `json:"error,omitempty"`
 }
 
 // BoardLeaderItem 板块龙头候选
@@ -74,6 +76,8 @@ type StockMoveList struct {
 	Items      []StockMoveItem `json:"items"`
 	Total      int64           `json:"total,omitempty"`
 	UpdateTime string          `json:"updateTime,omitempty"`
+	// Error 数据获取失败时的原因（如上游数据源限流），供前端提示。
+	Error string `json:"error,omitempty"`
 }
 
 // FundFlowKLine 资金流曲线单点

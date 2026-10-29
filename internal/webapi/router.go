@@ -29,8 +29,9 @@ type Router struct {
 	middlewares []func(http.Handler) http.Handler
 	// methodHandlers 记录每个路径对应的方法处理器。
 	methodHandlers map[string]map[string]http.HandlerFunc
-	// pendingPatterns 记录待注册到 mux 的新路径。
-	pendingPatterns []string
+	// registered 记录已向 mux 注册过入口的路径，
+	// 保证同一路径只注册一次（ServeMux 不允许重复注册）。
+	registered map[string]bool
 }
 
 // NewRouter 创建路由。
@@ -38,6 +39,7 @@ func NewRouter() *Router {
 	return &Router{
 		mux:            http.NewServeMux(),
 		methodHandlers: make(map[string]map[string]http.HandlerFunc),
+		registered:     make(map[string]bool),
 	}
 }
 
@@ -65,15 +67,18 @@ func (r *Router) HandleMethod(pattern, method string, h http.HandlerFunc) {
 	if !ok {
 		handlers = make(map[string]http.HandlerFunc)
 		r.methodHandlers[pattern] = handlers
-		// 新路径：记录需要注册 mux 入口。
-		r.pendingPatterns = append(r.pendingPatterns, pattern)
 	}
 	handlers[method] = h
 
-	// 每个路径只向 mux 注册一次入口。用 pendingPatterns 记录新路径，
-	// 避免"同路径同方法重复注册"时误判为首次。
-	if len(r.pendingPatterns) > 0 && r.pendingPatterns[len(r.pendingPatterns)-1] == pattern {
-		r.pendingPatterns = r.pendingPatterns[:len(r.pendingPatterns)-1]
+	// 每个路径只向 mux 注册一次入口。
+	//
+	// 必须用独立的 registered 集合判断，不能用"handlers 长度 == 1"：
+	// 同一方法被注册两次时长度仍为 1，会导致 mux 重复注册而 panic；
+	// 也不能用栈式 pendingPatterns：路由注册顺序不保证同一路径连续
+	// （先注册 /api/agents(GET)、再 /api/config(PUT)、最后 /api/agents(DELETE)），
+	// 栈顶已不是当前路径，判断会失败导致该方法未挂上（返回 404）。
+	if !r.registered[pattern] {
+		r.registered[pattern] = true
 		r.mux.HandleFunc(pattern, func(w http.ResponseWriter, req *http.Request) {
 			hs := r.methodHandlers[pattern]
 			if handler, ok := hs[req.Method]; ok {

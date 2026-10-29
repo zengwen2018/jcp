@@ -35,10 +35,20 @@ var (
 const (
 	sinaStockURL       = "http://hq.sinajs.cn/rn=%d&list=%s"
 	sinaKLineURL       = "http://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=%s&scale=%s&ma=5,10,20&datalen=%d"
-	emBoardFundFlowURL = "https://push2.eastmoney.com/api/qt/clist/get"
-	emFundFlowKLineURL = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
 	emAnnouncementURL  = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 )
+
+// emFallbackHosts 是东方财富接口的备用域名。
+//
+// 东方财富对云服务器 IP 有较强的风控：同一接口在部分机房会直接
+// 重置连接（EOF），但在浏览器 UA + Referer 下换个域名往往可用。
+// 这里按顺序回退，避免单点被封导致整个榜单类功能不可用。
+var emFallbackHosts = []string{
+	"https://push2.eastmoney.com",
+	"https://push2his.eastmoney.com",
+	"https://82.push2.eastmoney.com",
+	"https://48.push2.eastmoney.com",
+}
 
 const (
 	klineCacheTTLIntraday = 2 * time.Second
@@ -1045,7 +1055,7 @@ func (ms *MarketService) GetBoardFundFlowList(category string, page int, size in
 	params.Set("pz", strconv.Itoa(size))
 	params.Set("fs", boardFundFlowFS(normalizedCategory))
 
-	raw, err := ms.fetchMarketJSON(emBoardFundFlowURL+"?"+params.Encode(), map[string]string{
+	raw, err := ms.fetchEastMoneyJSON("/api/qt/clist/get", params, map[string]string{
 		"Referer":    "https://data.eastmoney.com/",
 		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 	})
@@ -1122,7 +1132,7 @@ func (ms *MarketService) GetStockMovesList(moveType string, page int, size int) 
 	params.Set("fields", "f12,f14,f2,f3,f22,f8,f5,f6,f62,f184,f15,f16,f17,f18,f124")
 	params.Set("ut", "8dec03ba335b81bf4ebdf7b29ec27d15")
 
-	raw, err := ms.fetchMarketJSON(emBoardFundFlowURL+"?"+params.Encode(), map[string]string{
+	raw, err := ms.fetchEastMoneyJSON("/api/qt/clist/get", params, map[string]string{
 		"Referer":         "https://quote.eastmoney.com/",
 		"User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 		"Accept":          "*/*",
@@ -1209,7 +1219,7 @@ func (ms *MarketService) GetBoardLeaders(boardCode string, limit int) (models.Bo
 	params.Set("pz", strconv.Itoa(fetchSize))
 	params.Set("fs", "b:"+normalizedBoard)
 
-	raw, err := ms.fetchMarketJSON(emBoardFundFlowURL+"?"+params.Encode(), map[string]string{
+	raw, err := ms.fetchEastMoneyJSON("/api/qt/clist/get", params, map[string]string{
 		"Referer":    "https://data.eastmoney.com/",
 		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 	})
@@ -1286,7 +1296,7 @@ func (ms *MarketService) GetIndexFundFlowSeries(code string, interval string, li
 	params.Set("ut", "b2884a393a59ad64002292a3e90d46a5")
 	params.Set("secid", indexSecID(code))
 
-	raw, err := ms.fetchMarketJSON(emFundFlowKLineURL+"?"+params.Encode(), map[string]string{
+	raw, err := ms.fetchEastMoneyJSON("/api/qt/stock/fflow/kline/get", params, map[string]string{
 		"Referer":    "https://quote.eastmoney.com/",
 		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 	})
@@ -1726,6 +1736,28 @@ func (ms *MarketService) fetchMarketJSON(urlStr string, headers map[string]strin
 		time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
 	}
 	return nil, lastErr
+}
+
+// fetchEastMoneyJSON 请求东方财富接口，失败时自动切换备用域名。
+//
+// 与 fetchMarketJSON 的区别：这里额外做了「换域名重试」——
+// 东方财富对云服务器 IP 的风控是按域名+IP 组合生效的，
+// 某个域名被重置时换一个域名往往能拿到数据。
+func (ms *MarketService) fetchEastMoneyJSON(path string, query url.Values, headers map[string]string) (map[string]any, error) {
+	if len(query) > 0 {
+		path += "?" + query.Encode()
+	}
+	var lastErr error
+	for _, host := range emFallbackHosts {
+		full := host + path
+		result, err := ms.fetchMarketJSON(full, headers)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		pusherLog.Warn("东方财富接口 %s 失败，尝试下一个域名: %v", host, err)
+	}
+	return nil, fmt.Errorf("东方财富接口全部域名均失败（最后错误: %v）", lastErr)
 }
 
 func (ms *MarketService) fetchMarketJSONOnce(urlStr string, headers map[string]string) (map[string]any, error) {

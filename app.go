@@ -1694,7 +1694,7 @@ func (a *App) GetBoardFundFlow(category string, page, pageSize int) models.Board
 	data, err := a.marketService.GetBoardFundFlowList(category, page, pageSize)
 	if err != nil {
 		log.Error("获取板块资金流失败: %v", err)
-		return models.BoardFundFlowList{Category: category}
+		return models.BoardFundFlowList{Category: category, Error: err.Error()}
 	}
 	return data
 }
@@ -1707,7 +1707,7 @@ func (a *App) GetStockMoves(moveType string, page, pageSize int) models.StockMov
 	data, err := a.marketService.GetStockMovesList(moveType, page, pageSize)
 	if err != nil {
 		log.Error("获取盘口异动失败: %v", err)
-		return models.StockMoveList{MoveType: moveType}
+		return models.StockMoveList{MoveType: moveType, Error: err.Error()}
 	}
 	return data
 }

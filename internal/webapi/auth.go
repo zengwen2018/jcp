@@ -104,6 +104,9 @@ func isPublicPath(path string) bool {
 		return true
 	case path == "/" || path == "/index.html":
 		return true
+	case path == "/favicon.ico":
+		// 浏览器自动请求图标，不应因缺令牌而报错
+		return true
 	default:
 		return false
 	}
