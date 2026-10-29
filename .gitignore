@@ -11,7 +11,7 @@ jcp
 mcp-test-client
 scripts
 *_test.go
-docs
+# docs 现已纳入版本管理（多维度技术文档集）
 .flowforge
 .workflow
 flowforge

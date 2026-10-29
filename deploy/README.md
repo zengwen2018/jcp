@@ -74,7 +74,59 @@
 
 ---
 
-## 三、本地构建与验证
+## 三、API 契约
+
+路由表是前后端之间的唯一契约来源，定义在 `internal/webapi/routes.go`。
+
+### 响应格式
+
+成功：
+
+```json
+{ "data": <返回值> }
+```
+
+失败：
+
+```json
+{ "error": "错误信息" }
+```
+
+### HTTP 方法约定
+
+| 操作 | 方法 | 路径示例 |
+|------|------|---------|
+| 读取 | GET | `GET /api/watchlist` |
+| 创建 | POST | `POST /api/watchlist` |
+| 更新 | PUT | `PUT /api/config` |
+| 删除 | DELETE | `DELETE /api/watchlist?symbol=sh600000` |
+
+同一路径可承载多个方法（如 `GET /api/config` 读、`PUT /api/config` 写），
+由 `Router.HandleMethod` 按方法分派。
+
+### 关键端点
+
+| 路径 | 说明 |
+|------|------|
+| `GET /api/health` | 健康检查，**无需鉴权** |
+| `GET /api/events` | SSE 事件流，令牌可走 `?token=` |
+| `POST /api/market/subscribe` | 订阅股票，body `{"codes":["sh600000"]}` |
+| `POST /api/market/orderbook/subscribe` | 订阅盘口，body `{"code":"sh600000"}` |
+| `POST /api/market/kline/subscribe` | 订阅 K 线，body `{"code":"...","period":"1d"}` |
+| `GET /api/frontend/ready` | 通知后端前端已就绪，启动推送循环 |
+
+### 一致性校验脚本
+
+改动路由后务必运行这两个脚本，否则会出现前后端不匹配导致的 404：
+
+```bash
+python check_routes.py      # 校验路由表与方法签名、参数数量匹配
+python check_api_paths.py   # 校验前端调用与后端路由的路径/方法一致
+```
+
+---
+
+## 四、本地构建与验证
 
 ### 前置条件
 
@@ -98,6 +150,11 @@ CGO_ENABLED=0 GOOS=linux go build -tags web -ldflags "-s -w" -o jcp-server .
 # Windows（本地调试用）
 go build -tags web -o jcp-server.exe .
 ```
+
+> **本机 Go 安装**：`winget install GoLang.Go`（国内网络建议从
+> [阿里云镜像](https://mirrors.aliyun.com/golang/) 下载 zip 解压，
+> winget 直连 go.dev 经常失败）。
+> `GOPROXY` 建议设为 `https://goproxy.cn,direct` 加速依赖下载。
 
 > **关键**：`-tags web` 是必须的。不加这个 tag 会编译出桌面版（需要图形界面）。
 > 桌面版仍可正常构建：`go build .` 或 `wails build`。
@@ -127,7 +184,7 @@ curl -N -H "Authorization: Bearer your-secret-token" http://localhost:8080/api/e
 
 ---
 
-## 四、服务器部署
+## 五、服务器部署
 
 ### 方式 A：Docker Compose（推荐）
 
@@ -211,7 +268,7 @@ location /api/events {
 
 ---
 
-## 五、安全要点
+## 六、安全要点
 
 ### 1. 访问令牌
 
@@ -247,7 +304,7 @@ Nginx 访问日志会记录请求路径。**注意**：如果用 `?token=` 方�
 
 ---
 
-## 六、资源占用参考
+## 七、资源占用参考
 
 2 核 2GB / 50GB SSD 的轻量应用服务器实测可用：
 
@@ -265,7 +322,7 @@ Nginx 访问日志会记录请求路径。**注意**：如果用 `?token=` 方�
 
 ---
 
-## 七、常见问题
+## 八、常见问题
 
 ### SSE 事件收不到 / 延迟几十秒
 Nginx 没关缓冲。检查 `proxy_buffering off;` 是否生效。
