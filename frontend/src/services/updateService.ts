@@ -1,5 +1,6 @@
-import { CheckForUpdate, DoUpdate, RestartApp, GetCurrentVersion } from '../../wailsjs/go/main/App';
-import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime';
+// 版本更新服务 - 调用后端API
+import { callBackend } from '../api/runtime';
+import { onEvent } from '../api/events';
 
 export interface UpdateInfo {
   hasUpdate: boolean;
@@ -17,22 +18,21 @@ export interface UpdateProgress {
 }
 
 export async function checkForUpdate(): Promise<UpdateInfo> {
-  return await CheckForUpdate();
+  return await callBackend<UpdateInfo>('CheckForUpdate', '/api/update/check');
 }
 
 export async function doUpdate(): Promise<string> {
-  return await DoUpdate();
+  return await callBackend<string>('DoUpdate', '/api/update/apply');
 }
 
 export async function restartApp(): Promise<string> {
-  return await RestartApp();
+  return await callBackend<string>('RestartApp', '/api/update/restart');
 }
 
 export async function getCurrentVersion(): Promise<string> {
-  return await GetCurrentVersion();
+  return await callBackend<string>('GetCurrentVersion', '/api/version');
 }
 
 export function onUpdateProgress(callback: (progress: UpdateProgress) => void): () => void {
-  EventsOn('update:progress', callback);
-  return () => EventsOff('update:progress');
+  return onEvent('update:progress', callback);
 }

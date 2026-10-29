@@ -1,0 +1,38 @@
+[Unit]
+Description=JCP 韭菜盘 Web 服务
+Documentation=https://github.com/zengwen2018/jcp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jcp
+Group=jcp
+WorkingDirectory=/opt/jcp
+
+# 访问令牌：务必修改为强随机值。
+# 生成方式：openssl rand -hex 32
+Environment="JCP_AUTH_TOKEN=CHANGE_ME"
+Environment="JCP_ADDR=:8080"
+Environment="JCPDATA_DIR=/opt/jcp/data"
+Environment="JCP_STATIC_DIR=/opt/jcp/static"
+Environment="TZ=Asia/Shanghai"
+
+ExecStart=/opt/jcp/jcp-server
+Restart=always
+RestartSec=5
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/jcp/data
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jcp-web
+
+[Install]
+WantedBy=multi-user.target

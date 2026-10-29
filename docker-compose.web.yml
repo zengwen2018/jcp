@@ -1,0 +1,32 @@
+services:
+  jcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VERSION: ${VERSION:-dev}
+    image: jcp-web:${VERSION:-latest}
+    container_name: jcp-web
+    restart: unless-stopped
+    ports:
+      # 只监听本机回环，公网流量统一由 Nginx 承接，
+      # 便于在 Nginx 层做 TLS、限流与访问日志。
+      - "127.0.0.1:8080:8080"
+    environment:
+      # 访问令牌：留空则不鉴权（仅限本地调试）。
+      # 生产环境务必通过 .env 设置一个强随机值。
+      JCP_AUTH_TOKEN: ${JCP_AUTH_TOKEN:-}
+      # 允许的前端来源，多个用逗号分隔。
+      JCP_CORS_ORIGINS: ${JCP_CORS_ORIGINS:-}
+      JCP_ADDR: ":8080"
+      JCPDATA_DIR: "/app/data"
+      JCP_STATIC_DIR: "/app/static"
+      TZ: "Asia/Shanghai"
+    volumes:
+      # 数据目录持久化，保存配置、自选股、会话记忆等。
+      - ./data:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

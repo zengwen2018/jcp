@@ -1,0 +1,6 @@
+# Web 模式构建产物
+jcp-server
+jcp-server.exe
+frontend/dist/
+data/
+*.log

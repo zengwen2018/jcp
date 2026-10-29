@@ -1,0 +1,64 @@
+# 韭菜盘（JCP）Web 服务模式 —— 多阶段构建
+#
+# 构建：docker build -t jcp-web:latest .
+# 运行：docker run -d -p 8080:8080 -v /opt/jcp/data:/app/data \
+#         -e JCP_AUTH_TOKEN=<你的令牌> jcp-web:latest
+
+# ---------- 阶段 1：构建前端 ----------
+FROM node:22-alpine AS frontend
+
+WORKDIR /build
+
+# 先拷贝依赖清单以利用 Docker 层缓存
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install --no-audit --no-fund
+
+COPY frontend/ ./
+RUN npm run build
+
+# ---------- 阶段 2：构建 Go 二进制 ----------
+FROM golang:1.24-alpine AS backend
+
+WORKDIR /build
+
+# 先拷贝依赖清单
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# 用 web tag 构建出 Web 服务模式二进制。
+# CGO_ENABLED=0 生成静态二进制，可运行在 Alpine 上。
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build \
+      -tags web \
+      -ldflags "-s -w -X main.WebVersion=${VERSION}" \
+      -o /build/jcp-server .
+
+# ---------- 阶段 3：运行时 ----------
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata && \
+    adduser -D -u 10001 jcp && \
+    mkdir -p /app/data && \
+    chown -R jcp:jcp /app
+
+WORKDIR /app
+
+COPY --from=backend /build/jcp-server /app/jcp-server
+COPY --from=frontend /build/frontend/dist /app/static
+
+# 以非 root 用户运行
+USER jcp
+
+ENV JCP_ADDR=":8080" \
+    JCPDATA_DIR="/app/data" \
+    JCP_STATIC_DIR="/app/static" \
+    TZ="Asia/Shanghai"
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+  CMD wget -qO- http://127.0.0.1:8080/api/health || exit 1
+
+ENTRYPOINT ["/app/jcp-server"]

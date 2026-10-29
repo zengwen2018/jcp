@@ -10,7 +10,7 @@ import (
 	"github.com/run-bigpig/jcp/internal/logger"
 	"github.com/run-bigpig/jcp/internal/models"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/run-bigpig/jcp/internal/pkg/eventbus"
 )
 
 var pusherLog = logger.New("pusher")
@@ -57,6 +57,7 @@ type MarketDataPusher struct {
 	marketService *MarketService
 	configService *ConfigService
 	newsService   *NewsService
+	bus           eventbus.EventBus
 
 	// 订阅管理
 	subscribedCodes  []string
@@ -86,11 +87,15 @@ type MarketDataPusher struct {
 }
 
 // NewMarketDataPusher 创建市场数据推送服务
-func NewMarketDataPusher(marketService *MarketService, configService *ConfigService, newsService *NewsService) *MarketDataPusher {
+func NewMarketDataPusher(marketService *MarketService, configService *ConfigService, newsService *NewsService, bus eventbus.EventBus) *MarketDataPusher {
+	if bus == nil {
+		bus = eventbus.NopBus{}
+	}
 	return &MarketDataPusher{
 		marketService:   marketService,
 		configService:   configService,
 		newsService:     newsService,
+		bus:             bus,
 		subscribedCodes: make([]string, 0),
 		stopChan:        make(chan struct{}),
 		readyChan:       make(chan struct{}),
@@ -134,15 +139,15 @@ func (p *MarketDataPusher) Stop() {
 	p.stopped = true
 	close(p.stopChan)
 	// 清理事件监听
-	runtime.EventsOff(p.ctx, EventMarketSubscribe)
-	runtime.EventsOff(p.ctx, EventOrderBookSubscribe)
-	runtime.EventsOff(p.ctx, EventKLineSubscribe)
+	p.bus.Off(EventMarketSubscribe)
+	p.bus.Off(EventOrderBookSubscribe)
+	p.bus.Off(EventKLineSubscribe)
 }
 
 // setupEventListeners 设置事件监听
 func (p *MarketDataPusher) setupEventListeners() {
 	// 监听订阅请求
-	runtime.EventsOn(p.ctx, EventMarketSubscribe, func(data ...any) {
+	p.bus.Listen(p.ctx, EventMarketSubscribe, func(data ...any) {
 		if len(data) > 0 {
 			if codes, ok := data[0].([]any); ok {
 				p.updateSubscriptions(codes)
@@ -151,7 +156,7 @@ func (p *MarketDataPusher) setupEventListeners() {
 	})
 
 	// 监听盘口订阅请求
-	runtime.EventsOn(p.ctx, EventOrderBookSubscribe, func(data ...any) {
+	p.bus.Listen(p.ctx, EventOrderBookSubscribe, func(data ...any) {
 		if len(data) > 0 {
 			if code, ok := data[0].(string); ok {
 				p.mu.Lock()
@@ -162,7 +167,7 @@ func (p *MarketDataPusher) setupEventListeners() {
 	})
 
 	// 监听K线订阅请求
-	runtime.EventsOn(p.ctx, EventKLineSubscribe, func(data ...any) {
+	p.bus.Listen(p.ctx, EventKLineSubscribe, func(data ...any) {
 		if len(data) >= 2 {
 			code, _ := data[0].(string)
 			period, _ := data[1].(string)
@@ -175,6 +180,38 @@ func (p *MarketDataPusher) setupEventListeners() {
 			}
 		}
 	})
+}
+
+// SetStockSubscriptions 设置股票订阅列表。
+//
+// 桌面模式下由前端 EventsEmit 触发；Web 模式下由 HTTP 订阅接口调用。
+func (p *MarketDataPusher) SetStockSubscriptions(codes []string) {
+	p.mu.Lock()
+	p.subscribedCodes = make([]string, 0, len(codes))
+	p.subscribedCodes = append(p.subscribedCodes, codes...)
+	p.mu.Unlock()
+}
+
+// SetOrderBookSubscription 设置盘口订阅的股票代码。
+func (p *MarketDataPusher) SetOrderBookSubscription(code string) {
+	if code == "" {
+		return
+	}
+	p.mu.Lock()
+	p.currentOrderBook = code
+	p.mu.Unlock()
+}
+
+// SetKLineSubscription 设置 K 线订阅。
+func (p *MarketDataPusher) SetKLineSubscription(code, period string) {
+	if code == "" || period == "" {
+		return
+	}
+	p.klineSubMu.Lock()
+	p.klineSub = KLineSubscription{Code: code, Period: period}
+	p.lastKLineTime = 0 // 重置增量时间戳
+	p.klineSubMu.Unlock()
+	go safeCall(p.pushKLineData)
 }
 
 // initSubscriptions 从自选股初始化订阅
@@ -342,7 +379,7 @@ func (p *MarketDataPusher) pushStockData() {
 	}
 
 	// 推送到前端
-	runtime.EventsEmit(p.ctx, EventStockUpdate, stocks)
+	p.bus.Emit(p.ctx, EventStockUpdate, stocks)
 }
 
 // pushOrderBookData 推送盘口数据（带diff检测）
@@ -371,7 +408,7 @@ func (p *MarketDataPusher) pushOrderBookData() {
 	p.lastOrderBookHash = hash
 	p.mu.Unlock()
 
-	runtime.EventsEmit(p.ctx, EventOrderBookUpdate, orderBook)
+	p.bus.Emit(p.ctx, EventOrderBookUpdate, orderBook)
 }
 
 // pushTelegraphData 推送快讯数据
@@ -398,7 +435,7 @@ func (p *MarketDataPusher) pushTelegraphData() {
 	p.mu.Unlock()
 
 	// 推送到前端
-	runtime.EventsEmit(p.ctx, EventTelegraphUpdate, latest)
+	p.bus.Emit(p.ctx, EventTelegraphUpdate, latest)
 }
 
 // pushMarketIndices 推送大盘指数
@@ -407,7 +444,7 @@ func (p *MarketDataPusher) pushMarketIndices() {
 	if err != nil {
 		return
 	}
-	runtime.EventsEmit(p.ctx, EventMarketIndicesUpdate, indices)
+	p.bus.Emit(p.ctx, EventMarketIndicesUpdate, indices)
 }
 
 // pushKLineData 推送K线数据（初始化时调用）
@@ -425,7 +462,7 @@ func (p *MarketDataPusher) pushKLineData() {
 		return
 	}
 
-	runtime.EventsEmit(p.ctx, EventKLineUpdate, map[string]any{
+	p.bus.Emit(p.ctx, EventKLineUpdate, map[string]any{
 		"code":   sub.Code,
 		"period": sub.Period,
 		"data":   klines,
@@ -459,7 +496,7 @@ func (p *MarketDataPusher) pushKLineMinute() {
 
 	// 首次或时间变化才推送
 	if lastTime == 0 || latestTime != lastTime {
-		runtime.EventsEmit(p.ctx, EventKLineUpdate, map[string]any{
+		p.bus.Emit(p.ctx, EventKLineUpdate, map[string]any{
 			"code":        sub.Code,
 			"period":      "1m",
 			"data":        []models.KLineData{latest},
@@ -504,7 +541,7 @@ func (p *MarketDataPusher) pushKLineDay() {
 		return
 	}
 
-	runtime.EventsEmit(p.ctx, EventKLineUpdate, map[string]any{
+	p.bus.Emit(p.ctx, EventKLineUpdate, map[string]any{
 		"code":   sub.Code,
 		"period": sub.Period,
 		"data":   klines,

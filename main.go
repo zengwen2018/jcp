@@ -1,3 +1,5 @@
+//go:build !web
+
 package main
 
 import (
@@ -14,9 +16,6 @@ import (
 
 //go:embed all:frontend/dist
 var assets embed.FS
-
-// Version 版本号，通过 ldflags 注入
-var Version = "dev"
 
 func main() {
 	// 捕获 panic 并写入日志文件
@@ -43,8 +42,8 @@ func main() {
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
+		OnStartup:        app.Startup,
+		OnShutdown:       app.Shutdown,
 		Bind: []interface{}{
 			app,
 		},

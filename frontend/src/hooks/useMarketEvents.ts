@@ -1,6 +1,14 @@
 import { useEffect, useCallback, useRef } from 'react';
-import { EventsOn, EventsOff, EventsEmit } from '@wailsjs/runtime/runtime';
-import { NotifyFrontendReady } from '../../wailsjs/go/main/App';
+import {
+  onEvent,
+  subscribe,
+  EVENT_STOCK_UPDATE,
+  EVENT_ORDERBOOK_UPDATE,
+  EVENT_TELEGRAPH_UPDATE,
+  EVENT_MARKET_INDICES_UPDATE,
+  EVENT_KLINE_UPDATE,
+} from '../api/events';
+import { callBackend } from '../api/runtime';
 import { Stock, OrderBook, Telegraph, MarketIndex, KLineData } from '../types';
 
 // K线推送数据结构
@@ -10,16 +18,6 @@ interface KLineUpdateData {
   data: KLineData[];
   incremental?: boolean; // 是否增量推送
 }
-
-// 事件名称常量，与后端保持一致
-const EVENT_STOCK_UPDATE = 'market:stock:update';
-const EVENT_ORDERBOOK_UPDATE = 'market:orderbook:update';
-const EVENT_TELEGRAPH_UPDATE = 'market:telegraph:update';
-const EVENT_MARKET_INDICES_UPDATE = 'market:indices:update';
-const EVENT_MARKET_SUBSCRIBE = 'market:subscribe';
-const EVENT_ORDERBOOK_SUBSCRIBE = 'market:orderbook:subscribe';
-const EVENT_KLINE_UPDATE = 'market:kline:update';
-const EVENT_KLINE_SUBSCRIBE = 'market:kline:subscribe';
 
 interface UseMarketEventsOptions {
   onStockUpdate?: (stocks: Stock[]) => void;
@@ -32,6 +30,9 @@ interface UseMarketEventsOptions {
 /**
  * 市场数据事件 Hook
  * 监听后端推送的实时市场数据
+ *
+ * 桌面模式走 Wails 事件，Web 模式走 SSE，
+ * 此处通过 api/events 统一订阅，调用方无需区分。
  */
 export function useMarketEvents(options: UseMarketEventsOptions) {
   const { onStockUpdate, onOrderBookUpdate, onTelegraphUpdate, onMarketIndicesUpdate, onKLineUpdate } = options;
@@ -55,28 +56,28 @@ export function useMarketEvents(options: UseMarketEventsOptions) {
   // 注册事件监听
   useEffect(() => {
     // 监听股票数据更新
-    EventsOn(EVENT_STOCK_UPDATE, (stocks: Stock[]) => {
-      stockCallbackRef.current?.(stocks);
+    const offStock = onEvent(EVENT_STOCK_UPDATE, (data) => {
+      stockCallbackRef.current?.(data as Stock[]);
     });
 
     // 监听盘口数据更新
-    EventsOn(EVENT_ORDERBOOK_UPDATE, (orderBook: OrderBook) => {
-      orderBookCallbackRef.current?.(orderBook);
+    const offOrderBook = onEvent(EVENT_ORDERBOOK_UPDATE, (data) => {
+      orderBookCallbackRef.current?.(data as OrderBook);
     });
 
     // 监听快讯数据更新
-    EventsOn(EVENT_TELEGRAPH_UPDATE, (telegraph: Telegraph) => {
-      telegraphCallbackRef.current?.(telegraph);
+    const offTelegraph = onEvent(EVENT_TELEGRAPH_UPDATE, (data) => {
+      telegraphCallbackRef.current?.(data as Telegraph);
     });
 
     // 监听大盘指数更新
-    EventsOn(EVENT_MARKET_INDICES_UPDATE, (indices: MarketIndex[]) => {
-      marketIndicesCallbackRef.current?.(indices);
+    const offIndices = onEvent(EVENT_MARKET_INDICES_UPDATE, (data) => {
+      marketIndicesCallbackRef.current?.(data as MarketIndex[]);
     });
 
     // 监听K线数据更新
-    EventsOn(EVENT_KLINE_UPDATE, (data: KLineUpdateData) => {
-      klineCallbackRef.current?.(data);
+    const offKLine = onEvent(EVENT_KLINE_UPDATE, (data) => {
+      klineCallbackRef.current?.(data as KLineUpdateData);
     });
 
     // 通知后端前端已准备好，循环调用直到成功
@@ -84,7 +85,9 @@ export function useMarketEvents(options: UseMarketEventsOptions) {
       let success = false;
       while (!success) {
         try {
-          await NotifyFrontendReady();
+          await callBackend<null>('NotifyFrontendReady', '/api/frontend/ready', [], {
+            httpMethod: 'GET',
+          });
           success = true;
         } catch {
           await new Promise(resolve => setTimeout(resolve, 500));
@@ -95,28 +98,28 @@ export function useMarketEvents(options: UseMarketEventsOptions) {
 
     // 清理函数
     return () => {
-      EventsOff(EVENT_STOCK_UPDATE);
-      EventsOff(EVENT_ORDERBOOK_UPDATE);
-      EventsOff(EVENT_TELEGRAPH_UPDATE);
-      EventsOff(EVENT_MARKET_INDICES_UPDATE);
-      EventsOff(EVENT_KLINE_UPDATE);
+      offStock();
+      offOrderBook();
+      offTelegraph();
+      offIndices();
+      offKLine();
     };
   }, []);
 
   // 订阅股票
-  const subscribe = useCallback((codes: string[]) => {
-    EventsEmit(EVENT_MARKET_SUBSCRIBE, codes);
+  const subscribeStocks = useCallback((codes: string[]) => {
+    subscribe('/api/market/subscribe', { codes });
   }, []);
 
   // 订阅盘口（指定当前选中的股票）
   const subscribeOrderBook = useCallback((code: string) => {
-    EventsEmit(EVENT_ORDERBOOK_SUBSCRIBE, code);
+    subscribe('/api/market/orderbook/subscribe', { code });
   }, []);
 
   // 订阅K线（指定股票代码和周期）
   const subscribeKLine = useCallback((code: string, period: string) => {
-    EventsEmit(EVENT_KLINE_SUBSCRIBE, code, period);
+    subscribe('/api/market/kline/subscribe', { code, period });
   }, []);
 
-  return { subscribe, subscribeOrderBook, subscribeKLine };
+  return { subscribe: subscribeStocks, subscribeOrderBook, subscribeKLine };
 }

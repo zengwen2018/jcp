@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { GetTradingSchedule } from '@wailsjs/go/main/App';
+import { callBackend } from '../api/runtime';
 
 // 交易时段
 interface TradingPeriod {
@@ -82,7 +82,7 @@ export function useMarketStatus() {
   const fetchScheduleWithRetry = useCallback(async () => {
     while (true) {
       try {
-        const data = await GetTradingSchedule();
+        const data = await callBackend<TradingSchedule>('GetTradingSchedule', '/api/market/schedule');
         if (data && data.periods && data.periods.length > 0) {
           setSchedule(data);
           return;

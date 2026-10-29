@@ -18,15 +18,20 @@ import (
 	"github.com/run-bigpig/jcp/internal/memory"
 	"github.com/run-bigpig/jcp/internal/models"
 	"github.com/run-bigpig/jcp/internal/openclaw"
+	"github.com/run-bigpig/jcp/internal/pkg/eventbus"
+	"github.com/run-bigpig/jcp/internal/pkg/platform"
 	"github.com/run-bigpig/jcp/internal/pkg/paths"
 	"github.com/run-bigpig/jcp/internal/pkg/proxy"
 	"github.com/run-bigpig/jcp/internal/services"
 	"github.com/run-bigpig/jcp/internal/services/hottrend"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 var log = logger.New("app")
+
+// Version 版本号，通过 ldflags 注入。
+// 桌面模式与 Web 模式共用，供更新服务与版本接口使用。
+var Version = "dev"
 
 const defaultCoreContextCacheTTL = 30 * time.Second
 
@@ -62,10 +67,32 @@ type App struct {
 	coreContextCacheTTL time.Duration
 	coreContextCache    map[string]coreContextCacheEntry
 	coreContextCacheMu  sync.RWMutex
+
+	// bus 事件总线，桌面模式走 Wails，Web 模式走 SSE
+	bus eventbus.EventBus
+	// desktop 桌面专属能力，Web 模式下为空实现
+	desktop platform.Desktop
 }
 
-// NewApp creates a new App application struct
+// NewApp 创建桌面模式的应用实例。
+//
+// 桌面模式使用 Wails 事件总线与桌面能力实现；
+// Web 模式请使用 NewAppWithDeps 注入 Web 总线与空桌面实现。
 func NewApp() *App {
+	return NewAppWithDeps(nil, nil)
+}
+
+// NewAppWithDeps 创建应用实例，允许注入事件总线与桌面能力。
+//
+// bus 为 nil 时使用空总线（无事件推送）；
+// desktop 为 nil 时使用空桌面实现（Web 模式）。
+func NewAppWithDeps(bus eventbus.EventBus, desktop platform.Desktop) *App {
+	if bus == nil {
+		bus = eventbus.NopBus{}
+	}
+	if desktop == nil {
+		desktop = platform.NopDesktop{}
+	}
 	dataDir := paths.GetDataDir()
 
 	// 初始化文件日志
@@ -162,7 +189,7 @@ func NewApp() *App {
 	agentContainer.LoadAgents(strategyService.GetAllAgents())
 
 	// 初始化更新服务
-	updateService := services.NewUpdateService("run-bigpig", "jcp", Version)
+	updateService := services.NewUpdateService("run-bigpig", "jcp", Version, bus)
 
 	// 初始化 OpenClaw 服务
 	openClawServer := openclaw.NewServer(meetingService, agentContainer, func(aiConfigID string) *models.AIConfig {
@@ -208,12 +235,14 @@ func NewApp() *App {
 		meetingCancels:      make(map[string]context.CancelFunc),
 		coreContextCacheTTL: defaultCoreContextCacheTTL,
 		coreContextCache:    make(map[string]coreContextCacheEntry),
+		bus:                 bus,
+		desktop:             desktop,
 	}
 }
 
 // startup is called when the app starts. The context is saved
 // so we can call the runtime methods
-func (a *App) startup(ctx context.Context) {
+func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 
 	// 初始化代理配置
@@ -237,7 +266,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	// 初始化并启动市场数据推送服务（需要 context）
-	a.marketPusher = services.NewMarketDataPusher(a.marketService, a.configService, a.newsService)
+	a.marketPusher = services.NewMarketDataPusher(a.marketService, a.configService, a.newsService, a.bus)
 	a.marketPusher.Start(ctx)
 	log.Info("市场数据推送服务已启动")
 
@@ -251,7 +280,7 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // shutdown 应用关闭时调用
-func (a *App) shutdown(ctx context.Context) {
+func (a *App) Shutdown(ctx context.Context) {
 	log.Info("应用正在关闭...")
 	if a.openClawServer != nil {
 		a.openClawServer.Stop()
@@ -648,7 +677,7 @@ func (a *App) SetActiveStrategy(id string) string {
 	// 重新加载Agent容器
 	a.agentContainer.LoadAgents(a.strategyService.GetAllAgents())
 	// 通知前端策略已切换
-	runtime.EventsEmit(a.ctx, "strategy:changed", id)
+	a.bus.Emit(a.ctx, "strategy:changed", id)
 	return "success"
 }
 
@@ -947,12 +976,12 @@ func (a *App) runSmartMeeting(ctx context.Context, stockCode string, stock model
 			MeetingMode: resp.MeetingMode,
 		}
 		a.sessionService.AddMessage(stockCode, msg)
-		runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
+		a.bus.Emit(a.ctx, "meeting:message:"+stockCode, msg)
 	}
 
 	// 进度回调：工具调用、流式输出等细粒度事件
 	progressCallback := func(event meeting.ProgressEvent) {
-		runtime.EventsEmit(a.ctx, "meeting:progress:"+stockCode, event)
+		a.bus.Emit(a.ctx, "meeting:progress:"+stockCode, event)
 	}
 
 	responses, err := a.meetingService.RunSmartMeetingWithCallback(ctx, aiConfig, chatReq, respCallback, progressCallback)
@@ -1022,7 +1051,7 @@ func (a *App) convertSaveAndEmitResponses(stockCode string, responses []meeting.
 		// 保存单条消息
 		a.sessionService.AddMessage(stockCode, msg)
 		// 推送事件（与智能模式一致）
-		runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
+		a.bus.Emit(a.ctx, "meeting:message:"+stockCode, msg)
 		messages = append(messages, msg)
 	}
 	return messages
@@ -1297,7 +1326,7 @@ func (a *App) RetryAgent(stockCode string, agentId string, query string) models.
 
 	// 进度回调
 	progressCallback := func(event meeting.ProgressEvent) {
-		runtime.EventsEmit(a.ctx, "meeting:progress:"+stockCode, event)
+		a.bus.Emit(a.ctx, "meeting:progress:"+stockCode, event)
 	}
 
 	resp, err := a.meetingService.RetrySingleAgent(a.ctx, aiConfig, &agentCfg, &stock, query, progressCallback, position)
@@ -1315,13 +1344,13 @@ func (a *App) RetryAgent(stockCode string, agentId string, query string) models.
 
 	if err != nil {
 		log.Error("RetryAgent failed: %v", err)
-		runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
+		a.bus.Emit(a.ctx, "meeting:message:"+stockCode, msg)
 		return msg
 	}
 
 	// 成功：保存并推送
 	a.sessionService.AddMessage(stockCode, msg)
-	runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
+	a.bus.Emit(a.ctx, "meeting:message:"+stockCode, msg)
 	return msg
 }
 
@@ -1357,12 +1386,12 @@ func (a *App) RetryAgentAndContinue(stockCode string) []models.ChatMessage {
 			MeetingMode: resp.MeetingMode,
 		}
 		a.sessionService.AddMessage(stockCode, msg)
-		runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
+		a.bus.Emit(a.ctx, "meeting:message:"+stockCode, msg)
 	}
 
 	// 进度回调
 	progressCallback := func(event meeting.ProgressEvent) {
-		runtime.EventsEmit(a.ctx, "meeting:progress:"+stockCode, event)
+		a.bus.Emit(a.ctx, "meeting:progress:"+stockCode, event)
 	}
 
 	responses, err := a.meetingService.ContinueMeeting(meetingCtx, stockCode, respCallback, progressCallback)
@@ -1406,7 +1435,7 @@ func (a *App) GetTelegraphList() []services.Telegraph {
 
 // OpenURL 在浏览器中打开URL
 func (a *App) OpenURL(url string) {
-	runtime.BrowserOpenURL(a.ctx, url)
+	a.desktop.OpenURL(a.ctx, url)
 }
 
 // ========== Tools API ==========
@@ -1534,17 +1563,17 @@ func (a *App) GetMCPServerTools(serverID string) []mcp.ToolInfo {
 
 // WindowMinimize 最小化窗口
 func (a *App) WindowMinimize() {
-	runtime.WindowMinimise(a.ctx)
+	a.desktop.WindowMinimise(a.ctx)
 }
 
 // WindowMaximize 最大化/还原窗口
 func (a *App) WindowMaximize() {
-	runtime.WindowToggleMaximise(a.ctx)
+	a.desktop.WindowToggleMaximise(a.ctx)
 }
 
 // WindowClose 关闭窗口
 func (a *App) WindowClose() {
-	runtime.Quit(a.ctx)
+	a.desktop.Quit(a.ctx)
 }
 
 // ========== HotTrend API ==========
@@ -1694,6 +1723,29 @@ func (a *App) GetBoardLeaders(boardCode string, limit int) models.BoardLeaderLis
 		return models.BoardLeaderList{BoardCode: boardCode}
 	}
 	return data
+}
+
+// SetStockSubscriptions 设置实时行情的股票订阅列表。
+//
+// Web 模式下由 HTTP 订阅接口调用；桌面模式由 Wails 事件驱动。
+func (a *App) SetStockSubscriptions(codes []string) {
+	if a.marketPusher != nil {
+		a.marketPusher.SetStockSubscriptions(codes)
+	}
+}
+
+// SetOrderBookSubscription 设置盘口订阅的股票代码。
+func (a *App) SetOrderBookSubscription(code string) {
+	if a.marketPusher != nil {
+		a.marketPusher.SetOrderBookSubscription(code)
+	}
+}
+
+// SetKLineSubscription 设置 K 线订阅。
+func (a *App) SetKLineSubscription(code, period string) {
+	if a.marketPusher != nil {
+		a.marketPusher.SetKLineSubscription(code, period)
+	}
 }
 
 // NotifyFrontendReady 前端通知已准备好，开始推送数据

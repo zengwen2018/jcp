@@ -12,7 +12,7 @@ import (
 	"github.com/blang/semver"
 	"github.com/run-bigpig/go-github-selfupdate/selfupdate"
 	"github.com/run-bigpig/jcp/internal/logger"
-	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/run-bigpig/jcp/internal/pkg/eventbus"
 )
 
 var updateLog = logger.New("update")
@@ -24,6 +24,7 @@ type UpdateService struct {
 	repoOwner      string // GitHub 仓库所有者
 	repoName       string // GitHub 仓库名称
 	currentVersion string // 当前版本号
+	bus            eventbus.EventBus
 }
 
 // UpdateInfo 更新信息
@@ -44,11 +45,15 @@ type UpdateProgress struct {
 }
 
 // NewUpdateService 创建更新服务实例
-func NewUpdateService(repoOwner, repoName, currentVersion string) *UpdateService {
+func NewUpdateService(repoOwner, repoName, currentVersion string, bus eventbus.EventBus) *UpdateService {
+	if bus == nil {
+		bus = eventbus.NopBus{}
+	}
 	return &UpdateService{
 		repoOwner:      repoOwner,
 		repoName:       repoName,
 		currentVersion: currentVersion,
+		bus:            bus,
 	}
 }
 
@@ -126,7 +131,7 @@ func (u *UpdateService) emitProgress(status, message string, percent int) {
 		Message: message,
 		Percent: percent,
 	}
-	wailsruntime.EventsEmit(u.ctx, "update:progress", progress)
+	u.bus.Emit(u.ctx, "update:progress", progress)
 }
 
 // Update 执行更新（下载并替换当前可执行文件）
