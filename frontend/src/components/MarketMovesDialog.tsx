@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Activity, RefreshCw, TrendingUp, X } from 'lucide-react';
-import { GetBoardFundFlow, GetBoardLeaders, GetStockMoves } from '../../wailsjs/go/main/App';
+import { callBackend } from '../api/runtime';
 
 interface MarketMovesDialogProps {
   isOpen: boolean;
@@ -114,7 +114,9 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
     setLeaderLoading(true);
     setLeaderError('');
     try {
-      const result = await GetBoardLeaders(boardCode, 6);
+      const result = await callBackend<any>('GetBoardLeaders', '/api/board/leaders', [boardCode, 6], {
+        query: { boardCode, limit: 6 },
+      });
       const normalized: BoardLeaderResult = {
         boardCode: result?.boardCode || boardCode,
         items: Array.isArray(result?.items) ? result.items : [],
@@ -137,7 +139,9 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
     setLoading(true);
     setError('');
     try {
-      const result = await GetBoardFundFlow(nextCategory, 1, 30);
+      const result = await callBackend<any>('GetBoardFundFlow', '/api/board/fundflow', [nextCategory, 1, 30], {
+        query: { category: nextCategory, page: 1, pageSize: 30 },
+      });
       const normalized: BoardFlowResult = {
         category: result?.category || nextCategory,
         items: Array.isArray(result?.items) ? result.items : [],
@@ -171,7 +175,9 @@ export const MarketMovesDialog: React.FC<MarketMovesDialogProps> = ({ isOpen, on
     setStockLoading(true);
     setStockError('');
     try {
-      const result = await GetStockMoves(nextType, 1, 50);
+      const result = await callBackend<any>('GetStockMoves', '/api/board/moves', [nextType, 1, 50], {
+        query: { moveType: nextType, page: 1, pageSize: 50 },
+      });
       const normalized: StockMoveResult = {
         moveType: result?.moveType || nextType,
         items: Array.isArray(result?.items) ? result.items : [],

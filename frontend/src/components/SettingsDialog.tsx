@@ -8,6 +8,7 @@ import { getStrategies, getActiveStrategyID, setActiveStrategy, deleteStrategy, 
 import { useTheme } from '../contexts/ThemeContext';
 import { useCandleColor, CandleColorMode } from '../contexts/CandleColorContext';
 import { useIndicator, IndicatorConfig, IndicatorType, DEFAULT_INDICATORS } from '../contexts/IndicatorContext';
+import { callBackend } from '../api/runtime';
 
 interface AIConfig {
   id: string;
@@ -1999,13 +2000,17 @@ const OpenClawSettings: React.FC<OpenClawSettingsProps> = ({ config, onChange })
 
   useEffect(() => {
     const fetchStatus = () => {
-      // @ts-ignore
-      window.go?.main?.App?.GetOpenClawStatus?.().then((s: any) => {
+      callBackend<{ running: boolean; port: number }>(
+        'GetOpenClawStatus',
+        '/api/openclaw/status',
+      ).then((s) => {
         setStatus(s);
         // 状态同步后结束切换中状态
         if (s && s.running === config.enabled) {
           setSwitching(false);
         }
+      }).catch(() => {
+        // OpenClaw 未启用或服务未运行时忽略
       });
     };
     fetchStatus();

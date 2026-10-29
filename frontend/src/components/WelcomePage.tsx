@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Stock } from '../types';
 import { searchStocks, StockSearchResult } from '../services/stockService';
 import { Search, TrendingUp, X } from 'lucide-react';
-import { WindowClose } from '../../wailsjs/go/main/App';
+import { windowClose } from '../api/runtime';
 import { useTheme } from '../contexts/ThemeContext';
 import logo from '../assets/images/logo.png';
 
@@ -80,7 +80,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onAddStock }) => {
       {/* 右上角关闭按钮 */}
       <div className="absolute top-3 right-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         <button
-          onClick={() => WindowClose()}
+          onClick={() => windowClose()}
           className={`p-1.5 rounded hover:bg-red-500/80 transition-colors ${colors.isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-white'}`}
           title="关闭"
         >

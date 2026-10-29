@@ -11,7 +11,13 @@
 import { isDesktop } from './runtime';
 import { getToken } from './client';
 
-type EventHandler<T = unknown> = (data: T) => void;
+/**
+ * 事件处理函数。
+ *
+ * Wails 的 EventsOn 回调可能收到多个参数（如 (msg, extra)），
+ * Web 模式的信封只有单个 data 字段，因此这里统一为「第一个参数 + 剩余参数」。
+ */
+type EventHandler<T = unknown> = (data: T, ...rest: unknown[]) => void;
 
 /** 事件名常量，与后端保持一致。 */
 export const EVENT_STOCK_UPDATE = 'market:stock:update';

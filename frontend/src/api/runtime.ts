@@ -74,3 +74,75 @@ export async function callBackend<T>(
   }
   return apiGet<T>(path, opts.query);
 }
+
+/**
+ * 桌面专属能力适配。
+ *
+ * 窗口最小化/最大化/关闭、获取窗口尺寸等操作只在桌面模式有意义。
+ * Web 模式下这些能力被降级为安全的空操作：
+ *   - WindowGetSize 返回浏览器视口尺寸（语义最接近）
+ *   - 其余方法静默失败，不抛异常
+ */
+
+/** 获取窗口尺寸。Web 模式返回视口尺寸。 */
+export async function windowGetSize(): Promise<{ w: number; h: number }> {
+  if (isDesktop()) {
+    const rt = (window as unknown as {
+      runtime?: { WindowGetSize(): Promise<{ w: number; h: number }> };
+    }).runtime;
+    if (rt?.WindowGetSize) {
+      return rt.WindowGetSize();
+    }
+  }
+  return { w: window.innerWidth, h: window.innerHeight };
+}
+
+/** 设置窗口尺寸。Web 模式为空操作。 */
+export async function windowSetSize(_w: number, _h: number): Promise<void> {
+  if (!isDesktop()) return;
+  const rt = (window as unknown as {
+    runtime?: { WindowSetSize(w: number, h: number): Promise<void> };
+  }).runtime;
+  await rt?.WindowSetSize?.(_w, _h);
+}
+
+/** 查询窗口是否已最大化。Web 模式恒为 false。 */
+export async function windowIsMaximised(): Promise<boolean> {
+  if (!isDesktop()) return false;
+  const rt = (window as unknown as {
+    runtime?: { WindowIsMaximised(): Promise<boolean> };
+  }).runtime;
+  if (!rt?.WindowIsMaximised) return false;
+  return rt.WindowIsMaximised();
+}
+
+/** 最小化窗口。Web 模式为空操作。 */
+export async function windowMinimize(): Promise<void> {
+  if (!isDesktop()) return;
+  const app = wailsApp();
+  await app?.WindowMinimize?.();
+}
+
+/** 切换窗口最大化。Web 模式为空操作。 */
+export async function windowMaximize(): Promise<void> {
+  if (!isDesktop()) return;
+  const app = wailsApp();
+  await app?.WindowMaximize?.();
+}
+
+/** 关闭窗口。Web 模式为空操作（由用户自行关闭标签页）。 */
+export async function windowClose(): Promise<void> {
+  if (!isDesktop()) return;
+  const app = wailsApp();
+  await app?.WindowClose?.();
+}
+
+/** 在默认浏览器中打开链接。Web 模式直接用新窗口打开。 */
+export async function openURL(url: string): Promise<void> {
+  if (isDesktop()) {
+    const app = wailsApp();
+    await app?.OpenURL?.(url);
+    return;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
+}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, TrendingUp, RefreshCw, ExternalLink } from 'lucide-react';
-import { GetAllHotTrends, OpenURL } from '../../wailsjs/go/main/App';
+import { callBackend, openURL } from '../api/runtime';
 import { hottrend } from '../../wailsjs/go/models';
 import { useTheme } from '../contexts/ThemeContext';
 
@@ -19,7 +19,7 @@ export const HotTrendDialog: React.FC<HotTrendDialogProps> = ({ isOpen, onClose 
   const loadHotTrends = async () => {
     setLoading(true);
     try {
-      const data = await GetAllHotTrends();
+      const data = await callBackend<any[]>('GetAllHotTrends', '/api/hottrend/all');
       setResults(data || []);
       if (data && data.length > 0 && !selectedPlatform) {
         setSelectedPlatform(data[0].platform);
@@ -181,7 +181,7 @@ const HotItemList: React.FC<{
 const HotItemRow: React.FC<{ item: hottrend.HotItem; isDark: boolean }> = ({ item, isDark }) => {
   const handleClick = () => {
     if (item.url) {
-      OpenURL(item.url);
+      openURL(item.url);
     }
   };
 

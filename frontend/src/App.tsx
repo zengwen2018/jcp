@@ -24,8 +24,7 @@ import { useMarketStatus } from './hooks/useMarketStatus';
 import { Stock, KLineData, OrderBook, TimePeriod, Telegraph, MarketIndex, F10Overview } from './types';
 import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp, BarChart3, Activity } from 'lucide-react';
 import logo from './assets/images/logo.png';
-import { GetTelegraphList, OpenURL, WindowMinimize, WindowMaximize, WindowClose } from '../wailsjs/go/main/App';
-import { WindowIsMaximised, WindowSetSize, WindowGetSize } from '../wailsjs/runtime/runtime';
+import { callBackend, windowMinimize, windowMaximize, windowClose, windowSetSize, windowGetSize, windowIsMaximised, openURL } from './api/runtime';
 
 // 布局配置常量
 const LAYOUT_DEFAULTS = {
@@ -148,7 +147,7 @@ const App: React.FC = () => {
 
   const syncWindowMaximizedState = useCallback(async () => {
     try {
-      const maximized = await WindowIsMaximised();
+      const maximized = await windowIsMaximised();
       setIsMaximized(maximized);
     } catch {
       // ignore runtime query failures and keep current UI state
@@ -157,7 +156,7 @@ const App: React.FC = () => {
 
   const toggleWindowMaximize = useCallback(async () => {
     try {
-      await WindowMaximize();
+      await windowMaximize();
       await syncWindowMaximizedState();
     } catch {
       // fallback to optimistic toggle when runtime query is unavailable
@@ -176,7 +175,7 @@ const App: React.FC = () => {
     saveTimeoutRef.current = setTimeout(async () => {
       try {
         const config = await getConfig();
-        const size = await WindowGetSize();
+        const size = await windowGetSize();
         config.layout = {
           leftPanelWidth: left,
           rightPanelWidth: right,
@@ -246,7 +245,7 @@ const App: React.FC = () => {
       setShowTelegraphList(true);
       setTelegraphLoading(true);
       try {
-        const list = await GetTelegraphList();
+        const list = await callBackend<any[]>('GetTelegraphList', '/api/telegraph');
         setTelegraphList(list || []);
       } finally {
         setTelegraphLoading(false);
@@ -259,7 +258,7 @@ const App: React.FC = () => {
   // 打开快讯链接
   const handleOpenTelegraph = (telegraph: Telegraph) => {
     if (telegraph.url) {
-      OpenURL(telegraph.url);
+      openURL(telegraph.url);
     }
     setShowTelegraphList(false);
   };
@@ -358,7 +357,7 @@ const App: React.FC = () => {
           if (config.layout.bottomPanelHeight > 0) setBottomPanelHeight(config.layout.bottomPanelHeight);
           // 恢复窗口大小
           if (config.layout.windowWidth > 0 && config.layout.windowHeight > 0) {
-            WindowSetSize(config.layout.windowWidth, config.layout.windowHeight);
+            windowSetSize(config.layout.windowWidth, config.layout.windowHeight);
           }
         }
 
@@ -373,7 +372,7 @@ const App: React.FC = () => {
           setCurrentSession(session);
         }
         // 主动获取一次快讯数据（解决启动时后端推送早于前端监听注册的时序问题）
-        const telegraphs = await GetTelegraphList();
+        const telegraphs = await callBackend<any[]>('GetTelegraphList', '/api/telegraph');
         if (telegraphs && telegraphs.length > 0) {
           const latest = telegraphs[0];
           setMarketMessage(`[${latest.time}] ${latest.content}`);
@@ -556,7 +555,7 @@ const App: React.FC = () => {
           {/* 窗口控制按钮 */}
           <div className="flex items-center ml-2 border-l fin-divider pl-3">
             <button
-              onClick={() => WindowMinimize()}
+              onClick={() => void windowMinimize()}
               className={`p-1.5 rounded transition-colors ${colors.isDark ? 'hover:bg-slate-700/50 text-slate-400 hover:text-white' : 'hover:bg-slate-200/50 text-slate-500 hover:text-slate-900'}`}
               title="最小化"
             >
@@ -570,7 +569,7 @@ const App: React.FC = () => {
               {isMaximized ? <Copy className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
             </button>
             <button
-              onClick={() => WindowClose()}
+              onClick={() => void windowClose()}
               className={`p-1.5 rounded hover:bg-red-500/80 hover:text-white transition-colors ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}
               title="关闭"
             >

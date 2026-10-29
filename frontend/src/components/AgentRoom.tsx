@@ -5,10 +5,10 @@ import { StockSession, ChatMessage, sendMeetingMessage, MeetingMessageRequest, g
 import { MessageSquare, Loader2, Send, User, Users, X, Reply, Trash2, Wrench, CheckCircle2, AlertCircle, Copy, Check, RotateCcw, Pencil, Square } from 'lucide-react';
 import { clearSessionMessages } from '../services/sessionService';
 import { NodeRenderer } from 'markstream-react';
-import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime';
+import { onEvent } from '../api/events';
 import { useMentionPicker } from '../hooks/useMentionPicker';
 import { useTheme } from '../contexts/ThemeContext';
-import { CancelMeeting } from '../../wailsjs/go/main/App';
+import { callBackend } from '../api/runtime';
 import 'markstream-react/index.css';
 
 // 进度事件类型
@@ -102,7 +102,9 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
   // 取消指定股票的会议
   const cancelMeeting = (stockCode: string) => {
     // 调用后端取消 API
-    CancelMeeting(stockCode).catch(err => {
+    callBackend<boolean>('CancelMeeting', '/api/meeting/cancel', [stockCode], {
+      query: { stockCode },
+    }).catch(err => {
       console.error('[AgentRoom] 取消会议失败:', err);
     });
     // 前端状态重置
@@ -134,12 +136,11 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
 
   // 监听策略切换事件，重新加载Agent配置
   useEffect(() => {
-    const cleanup = EventsOn('strategy:changed', () => {
+    const cleanup = onEvent('strategy:changed', () => {
       console.log('[AgentRoom] 策略已切换，重新加载Agent配置');
       loadAgents();
     });
     return () => {
-      EventsOff('strategy:changed');
       if (cleanup) cleanup();
     };
   }, []);
@@ -177,7 +178,7 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
 
     const stockCode = session.stockCode;
     const eventName = `meeting:message:${stockCode}`;
-    const cleanup = EventsOn(eventName, (msg: ChatMessage) => {
+    const cleanup = onEvent<ChatMessage>(eventName, (msg) => {
       // 检查是否已取消或切换了股票
       if (meetingCancelledRef.current[stockCode]) return;
       if (currentStockCodeRef.current === stockCode) {
@@ -186,7 +187,6 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
     });
 
     return () => {
-      EventsOff(eventName);
       if (cleanup) cleanup();
     };
   }, [session?.stockCode]);
@@ -197,7 +197,7 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
 
     const stockCode = session.stockCode;
     const eventName = `meeting:progress:${stockCode}`;
-    const cleanup = EventsOn(eventName, (event: ProgressEvent) => {
+    const cleanup = onEvent<ProgressEvent>(eventName, (event) => {
       // 检查是否已取消或切换了股票
       if (meetingCancelledRef.current[stockCode]) return;
       if (currentStockCodeRef.current !== stockCode) return;
@@ -239,7 +239,6 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
     });
 
     return () => {
-      EventsOff(eventName);
       if (cleanup) cleanup();
     };
   }, [session?.stockCode]);

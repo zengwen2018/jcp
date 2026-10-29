@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, TrendingUp, RefreshCw, Calendar, ChevronDown } from 'lucide-react';
-import { GetLongHuBangList, GetLongHuBangDetail, GetTradeDates } from '../../wailsjs/go/main/App';
+import { callBackend } from '../api/runtime';
 import { models } from '../../wailsjs/go/models';
 import { useCandleColor } from '../contexts/CandleColorContext';
 
@@ -29,7 +29,9 @@ export const LongHuBangDialog: React.FC<LongHuBangDialogProps> = ({ isOpen, onCl
       setLoading(true);
     }
     try {
-      const result = await GetLongHuBangList(pageSize, page, date);
+      const result = await callBackend<any>('GetLongHuBangList', '/api/longhubang/list', [pageSize, page, date], {
+        query: { pageSize, pageNumber: page, tradeDate: date },
+      });
       if (result) {
         const newItems = result.items || [];
         if (append) {
@@ -51,7 +53,9 @@ export const LongHuBangDialog: React.FC<LongHuBangDialogProps> = ({ isOpen, onCl
   useEffect(() => {
     if (isOpen) {
       // 先获取交易日列表
-      GetTradeDates(60).then((dates) => {
+      callBackend<string[]>('GetTradeDates', '/api/market/tradedates', [60], {
+        query: { days: 60 },
+      }).then((dates) => {
         if (dates && dates.length > 0) {
           // 使用北京时间判断，16点前从列表中排除今天
           const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
@@ -273,7 +277,9 @@ const ItemList: React.FC<{
     onSelect(item);
     setDetailLoading(true);
     try {
-      const data = await GetLongHuBangDetail(item.code, item.tradeDate);
+      const data = await callBackend<any>('GetLongHuBangDetail', '/api/longhubang/detail', [item.code, item.tradeDate], {
+        query: { code: item.code, tradeDate: item.tradeDate },
+      });
       setDetails(data || []);
     } finally {
       setDetailLoading(false);
