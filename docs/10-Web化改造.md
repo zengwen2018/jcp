@@ -131,6 +131,32 @@ export async function callBackend<T>(
 
 Wails 桌面模式会把 `window.go.main.App` 注入全局；Web 模式下这个对象不存在，据此自动分流。
 
+#### 桌面专属能力
+
+窗口最小化/最大化/关闭、获取窗口尺寸这类操作只在桌面模式有意义。Web 模式下
+统一降级为安全空操作，由 `frontend/src/api/runtime.ts` 集中适配：
+
+| 函数 | 桌面模式 | Web 模式 |
+|------|---------|---------|
+| `windowGetSize()` | 转发 Wails runtime | 返回浏览器视口尺寸（语义最接近） |
+| `windowSetSize(w, h)` | 转发 Wails runtime | 空操作 |
+| `windowIsMaximised()` | 转发 Wails runtime | 恒为 `false` |
+| `windowMinimize()` / `windowMaximize()` / `windowClose()` | 转发 Wails runtime | 空操作（用户自行关闭标签页） |
+| `openURL(url)` | 转发 `App.OpenURL` | `window.open(url, '_blank', 'noopener,noreferrer')` |
+
+#### 事件订阅
+
+统一走 `frontend/src/api/events.ts` 的 `onEvent(name, handler)`：
+
+- 桌面模式转 `runtime.EventsOn`
+- Web 模式走 SSE 信封，由 `WebEventBus` 按 `event` 字段分发
+
+回调签名兼容 Wails 的多参数形式：
+
+```typescript
+type EventHandler<T = unknown> = (data: T, ...rest: unknown[]) => void;
+```
+
 ---
 
 ## 3. 关键技术决策
@@ -177,18 +203,31 @@ panic: pattern "/api/strategies/active" conflicts with pattern "/api/strategies/
 JCP 需要 `GET /api/config`（读）和 `PUT /api/config`（写）共存，因此自实现了方法分派：
 
 ```go
+type Router struct {
+    mux            *http.ServeMux
+    methodHandlers map[string]map[string]http.HandlerFunc
+    // registered 记录已向 mux 注册过入口的路径，
+    // 保证同一路径只注册一次（ServeMux 不允许重复注册）。
+    registered map[string]bool
+}
+
 func (r *Router) HandleMethod(pattern, method string, h http.HandlerFunc) {
     handlers, ok := r.methodHandlers[pattern]
     if !ok {
         handlers = make(map[string]http.HandlerFunc)
         r.methodHandlers[pattern] = handlers
-        r.pendingPatterns = append(r.pendingPatterns, pattern)
     }
     handlers[method] = h
 
-    // 每个路径只向 mux 注册一次入口
-    if len(r.pendingPatterns) > 0 && r.pendingPatterns[len(r.pendingPatterns)-1] == pattern {
-        r.pendingPatterns = r.pendingPatterns[:len(r.pendingPatterns)-1]
+    // 每个路径只向 mux 注册一次入口。
+    //
+    // 必须用独立的 registered 集合判断，不能用"handlers 长度 == 1"：
+    // 同一方法被注册两次时长度仍为 1，会导致 mux 重复注册而 panic；
+    // 也不能用栈式 pendingPatterns：路由注册顺序不保证同一路径连续
+    // （先注册 /api/agents(GET)、再 /api/config(PUT)、最后 /api/agents(DELETE)），
+    // 栈顶已不是当前路径，判断会失败导致该方法未挂上（返回 404）。
+    if !r.registered[pattern] {
+        r.registered[pattern] = true
         r.mux.HandleFunc(pattern, func(w http.ResponseWriter, req *http.Request) {
             hs := r.methodHandlers[pattern]
             if handler, ok := hs[req.Method]; ok {
@@ -200,6 +239,12 @@ func (r *Router) HandleMethod(pattern, method string, h http.HandlerFunc) {
     }
 }
 ```
+
+> **两种"看起来对"的实现都会出错**：`len(handlers) == 1` 会在同方法重复注册时
+> panic；栈式 `pendingPatterns` 会在注册顺序不连续时漏挂方法（404）。
+> 正确做法是用独立的 `registered map[string]bool`。
+> 详见 [4.3 路由重复注册 panic](#43-路由重复注册-panic) 与
+> [4.10 路由注册顺序导致的 404](#410-路由注册顺序导致的-404)。
 
 ### 3.4 SSE 统一信封
 
@@ -296,7 +341,7 @@ out := e.fn.Call(args)
 
 用 `len(handlers) == 1` 判断"是否首次注册"是错的——**同一方法注册两次**时 len 仍为 1，会重复调 `mux.HandleFunc` 导致 panic。
 
-**修复**：用 `pendingPatterns` 记录新路径。
+**修复**：用独立的 `registered map[string]bool` 记录已注册入口的路径。
 
 **症状**：`panic: pattern "/api/strategies/active" conflicts with pattern ...`
 
@@ -397,6 +442,71 @@ zipfile.ZipFile('go.zip').extractall(r'D:\Program Files')
 
 ---
 
+### 4.10 路由注册顺序导致的 404
+
+修完 4.3 的 panic 后换成了栈式 `pendingPatterns`，以为万无一失，实测仍有
+`DELETE /api/agents` 返回 **404**。
+
+**原因**：路由注册顺序**不保证同一路径连续**。实际顺序是
+
+```
+/api/agents       (GET)
+/api/config       (PUT)
+/api/agents       (DELETE)   ← 此时栈顶是 /api/config，不是 /api/agents
+```
+
+栈顶判断失败 → DELETE 分支从未挂到 mux 入口 → 404。
+
+**修复**：改用独立的 `registered map[string]bool`，与注册顺序完全解耦。
+
+**教训**：判断"是否已处理过"时，不要用依赖历史顺序的栈式结构，
+用集合（set/map）表达"已存在"这个语义。
+
+### 4.11 漏改相对路径的 Wails 引用，页面白屏
+
+首次改造只清理了 `@wailsjs/` **别名路径**，漏掉了两类：
+
+- **相对路径**导入：`../wailsjs/...`、`../../wailsjs/...`
+- **全局对象直接访问**：`window.go.main.App`、`window.runtime.EventsOnMultiple`
+
+Web 模式下 React 渲染时直接抛 TypeError：
+
+```
+Cannot read properties of undefined (reading 'main')
+Cannot read properties of undefined (reading 'EventsOnMultiple')
+```
+
+页面停在"加载中…"或全黑。受影响 7 个文件：`App.tsx`、`AgentRoom.tsx`、
+`SettingsDialog.tsx`、`HotTrendDialog.tsx`、`LongHuBangDialog.tsx`、
+`MarketMovesDialog.tsx`、`WelcomePage.tsx`。
+
+**教训**：清理框架依赖时必须**同时覆盖三类**：
+
+1. 别名路径（`@wailsjs/...`）
+2. 相对路径（`../wailsjs/...`）
+3. 全局对象直接访问（`window.xxx`）
+
+用 `grep -rn "wailsjs\|window\." --include="*.ts" --include="*.tsx"` 全量扫，
+只 grep 别名路径会漏。
+
+### 4.12 东方财富对云服务器 IP 的风控
+
+盘口异动、板块资金流无数据，接口报 EOF。**同一 URL 在本机返回完整数据
+（异动榜 5563 条），在服务器上连接被重置**。
+
+**根因**：`push2.eastmoney.com` 对云服务器 IP 有较强风控。数据源层面的限制，
+**与 Web 改造无关** —— 原版桌面版部署到同一台机器同样中招。
+
+**缓解**（`internal/services/market_service.go`）：
+
+- 新增 `fetchEastMoneyJSON`，失败时按 `push2` → `push2his` → `82.push2` →
+  `48.push2` 依次回退，缓解轻度风控
+- `BoardFundFlowList` / `StockMoveList` 增加 `Error` 字段，前端在无数据时
+  透出后端的具体原因，而不是笼统的"暂无数据"
+
+**绕过**：所有东财服务都走 `proxy.GetManager().GetClientWithTimeout()`，
+在「设置 → 代理」填一个境内可用的 HTTP 代理即可，代理在这一层生效。
+
 ## 5. 验证
 
 ### 5.1 编译
@@ -421,19 +531,49 @@ go test -tags web ./internal/pkg/eventbus/   # ok
 ```bash
 python check_routes.py       # 路由表 ↔ 方法签名
 python check_api_paths.py    # 前端 46 处调用 ↔ 后端路由
+python check_docs.py         # 文档 ↔ 代码语义一致
 ```
+
+`check_docs.py` 是**文档一致性的守门脚本**，覆盖：
+
+| 检查项 | 内容 |
+|--------|------|
+| 语义断言 | 代码里的关键实现特征 ↔ 文档描述，双向核对 |
+| 数量断言 | 工具 37 / 端点 60 / service 8 / 组件 15，文档写的数字必须与代码一致 |
+| 链接 | 文档间跳转的文件是否存在 |
+| 锚点 | 文档内锚点链接是否有效 |
+| 代码块 | Markdown 代码围栏是否闭合 |
+
+> **改代码或配置后必须重跑它**。若报"代码已改，文档未同步"，
+> 说明文档落后于实现，需补齐后再提交。
 
 ### 5.4 端到端实测
 
+生产环境（轻量应用服务器）实测：
+
 | 项目 | 结果 |
 |------|------|
+| **API 契约测试** | **45 / 45 通过**（鉴权边界、60 端点、写操作、错误处理、密钥脱敏） |
+| **UI 交互测试** | **26 / 26 通过**（首屏、K线 4 周期、F10、3 个弹窗、设置面板、搜索、AI 输入、SSE） |
+| **控制台** | 全程 **0 个 JS 错误、0 个 4xx 响应** |
 | 鉴权 | 无令牌 401 / Bearer 200 / Query 200 / 错误令牌 401 |
-| 静态资源 | 200 |
-| 10+ 业务接口 | 全部 200 |
-| 行情数据 | 真实（浦发 9.99 +1.42%，上证 3651.43） |
+| 行情数据 | 真实（浦发 9.99 +1.42%，平安 11.54 +2.03%，上证 3651.43） |
 | 配置脱敏往返 | 写入存明文 → 读取 `********` → 掩码回传后明文保留、其它字段正常 |
-| SSE | `connected` + `market:indices:update` + `market:stock:update` |
-| 前端页面 | 200，JS 产物 1MB 可访问 |
+| SSE | `connected` + `market:indices:update` + `market:stock:update` + 心跳 |
+| 前端页面 | 三栏布局完整渲染，JS 产物 1MB 可访问 |
+
+自动化测试脚本放在工作区，可直接重跑回归：
+
+| 脚本 | 覆盖内容 |
+|------|---------|
+| `test_api.js` | 45 项：鉴权边界 5、只读端点 34、写端点 6、错误处理 3、密钥脱敏 |
+| `test_ui.js` | 26 项：首屏、自选股、K线、F10、工具栏、设置、弹窗、搜索、AI 输入、SSE、控制台错误 |
+| `test_secret.js` / `test_secret2.js` | 密钥脱敏全链路（含服务端文件核对） |
+
+> 浏览器验证用 **Node 脚本调 playwright-core + 本机 Chrome**：
+> `executablePath: 'C:/Users/57618/AppData/Local/Google/Chrome/Application/chrome.exe'`
+> （本机缺 `chromium_headless_shell`）。本机代理需清空：
+> `NO_PROXY=<host> HTTP_PROXY= HTTPS_PROXY=`
 
 ---
 

@@ -37,6 +37,10 @@ HTTP 状态码：
 | 405 | 方法不支持 |
 | 500 | 服务端错误 |
 
+> **业务级失败不一定体现在状态码上**：部分端点（如榜单类）在上游数据源
+> 不可用时仍返回 **200**，失败原因放在 `data.error` 字段里。
+> 调用方需同时检查 `data.items` 是否为空与 `data.error` 是否有值。
+
 ### 1.3 鉴权
 
 除 `/api/health` 与静态资源外，所有接口都需要令牌。三种传递方式任选其一：
@@ -1011,6 +1015,24 @@ curl -H "Authorization: Bearer $TOKEN" \
   "http://<host>:<port>/api/board/fundflow?category=<category>&page=<page>&pageSize=<pageSize>"
 ```
 
+**响应中的 `error` 字段**
+
+上游数据获取失败时，`data.items` 为空且 `data.error` 携带具体原因：
+
+```json
+{
+  "data": {
+    "category": "industry",
+    "items": null,
+    "error": "东方财富接口全部域名均失败（最后错误: ...）"
+  }
+}
+```
+
+> 东方财富对云服务器 IP 有较强风控，榜单类接口可能拿不到数据。
+> 前端会透出该原因，而不是笼统的"暂无数据"。绕过方式见
+> [10-Web化改造.md §4.12](10-Web化改造.md#412-东方财富对云服务器-ip-的风控)。
+
 #### `GET /api/board/moves`
 
 获取盘口异动榜单
@@ -1027,6 +1049,11 @@ curl -H "Authorization: Bearer $TOKEN" \
 curl -H "Authorization: Bearer $TOKEN" \
   "http://<host>:<port>/api/board/moves?moveType=<moveType>&page=<page>&pageSize=<pageSize>"
 ```
+
+**响应中的 `error` 字段**
+
+同 [`/api/board/fundflow`](#get-apiboardfundflow)：上游失败时 `data.error`
+携带原因，`data.items` 为空。
 
 #### `GET /api/board/leaders`
 
