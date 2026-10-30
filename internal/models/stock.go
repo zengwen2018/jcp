@@ -15,6 +15,10 @@ type Stock struct {
 	High          float64 `json:"high"`
 	Low           float64 `json:"low"`
 	PreClose      float64 `json:"preClose"`
+	// 涨跌停价（腾讯行情 field47/48），源站已按品种规则算好（股票 ETF ±10%，创业板/科创板成分 ±20%）。
+	// 仅腾讯源提供，其余源留空。
+	LimitUpPrice   float64 `json:"limitUpPrice,omitempty"`
+	LimitDownPrice float64 `json:"limitDownPrice,omitempty"`
 }
 
 // KLineData K线数据

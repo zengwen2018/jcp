@@ -24,6 +24,7 @@ type Registry struct {
 	f10Service            *services.F10Service
 	hotTrendService       *hottrend.HotTrendService
 	longHuBangService     *services.LongHuBangService
+	etfService            *services.ETFService
 	tools                 map[string]tool.Tool
 	toolInfos             map[string]ToolInfo // 工具信息映射
 }
@@ -37,6 +38,7 @@ func NewRegistry(
 	f10Service *services.F10Service,
 	hotTrendService *hottrend.HotTrendService,
 	longHuBangService *services.LongHuBangService,
+	etfService *services.ETFService,
 ) *Registry {
 	r := &Registry{
 		marketService:         marketService,
@@ -46,6 +48,7 @@ func NewRegistry(
 		f10Service:            f10Service,
 		hotTrendService:       hotTrendService,
 		longHuBangService:     longHuBangService,
+		etfService:            etfService,
 		tools:                 make(map[string]tool.Tool),
 		toolInfos:             make(map[string]ToolInfo),
 	}
@@ -57,6 +60,10 @@ func NewRegistry(
 func (r *Registry) registerAllTools() {
 	// 注册股票实时数据工具
 	r.registerTool("get_stock_realtime", "获取股票实时行情数据，包括当前价格、涨跌幅、开盘价、最高价、最低价、成交量等", r.createStockRealtimeTool)
+
+	// 注册 ETF 专属工具：行情含 IOPV/折溢价/涨跌停/T+0，画像含类别/规模/管理人/净值
+	r.registerTool("get_etf_quote", "获取场内 ETF 实时行情（市价/IOPV/折溢价/涨跌停/T+0）", r.createETFQuoteTool)
+	r.registerTool("get_etf_profile", "获取场内 ETF 画像（类别/规模/管理人/上市日/近期净值）", r.createETFProfileTool)
 
 	// 注册市场状态与指数工具
 	r.registerTool("get_market_status", "获取A股交易状态（交易中/休市/盘前等）", r.createMarketStatusTool)

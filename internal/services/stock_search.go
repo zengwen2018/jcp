@@ -19,6 +19,8 @@ type StockSearchResult struct {
 	Name     string `json:"name"`
 	Industry string `json:"industry"`
 	Market   string `json:"market"`
+	// SecurityType 证券细分类：stock / etf / lof / index；为空表示未知（如内嵌兜底源）
+	SecurityType string `json:"securityType,omitempty"`
 }
 
 func searchEmbeddedStocks(keyword string, limit int) []StockSearchResult {

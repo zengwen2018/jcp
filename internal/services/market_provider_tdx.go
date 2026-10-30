@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/injoyai/tdx"
@@ -27,6 +28,15 @@ type stockCatalogCache struct {
 	Items     []StockSearchResult `json:"items"`
 }
 
+// tdxCodeCatalogCache TDX 代码目录缓存（价格换算所需的 Decimal 等信息）。
+//
+// 与 stockCatalogCache 分开存放：搜索目录关心"名称与市场"，
+// 而换算目录关心"Decimal/Multiple"，两者的刷新节奏与体积都不同。
+type tdxCodeCatalogCache struct {
+	UpdatedAt time.Time               `json:"updatedAt"`
+	Entries   map[string]tdxCodeEntry `json:"entries"`
+}
+
 type tdxMarketProvider struct {
 	mu           sync.RWMutex
 	clientMu     sync.Mutex
@@ -37,29 +47,181 @@ type tdxMarketProvider struct {
 	updatedAt    time.Time
 	cacheTTL     time.Duration
 	cachePath    string
+
+	// codes 是自维护的 tdx.ICodes 实现，为 tdx 库提供价格换算所需的 Decimal。
+	// 详见 tdx_codes.go 的说明。
+	codes *tdxSelfCodes
+	// codesInstalled 标记 tdx.DefaultCodes 是否已安装，避免重复写全局变量。
+	codesInstalled atomic.Bool
+	// codesMu 保护 codes 的安装与权威目录加载过程。
+	codesMu sync.Mutex
+	// codeCatalogReady 标记权威目录是否已加载完成。
+	codeCatalogReady atomic.Bool
+	// codeCatalogPath 是代码目录缓存文件路径。
+	codeCatalogPath string
 }
 
 func newTDXMarketProvider() *tdxMarketProvider {
-	return &tdxMarketProvider{
-		nameBySymbol: make(map[string]string),
-		cacheTTL:     12 * time.Hour,
-		cachePath:    filepath.Join(paths.EnsureCacheDir("market"), "tdx_stock_catalog.json"),
+	provider := &tdxMarketProvider{
+		nameBySymbol:   make(map[string]string),
+		cacheTTL:       12 * time.Hour,
+		cachePath:      filepath.Join(paths.EnsureCacheDir("market"), "tdx_stock_catalog.json"),
+		codeCatalogPath: filepath.Join(paths.EnsureCacheDir("market"), "tdx_code_catalog.json"),
+		codes:          newTDXSelfCodes(),
 		dialClient: func() (tdxClient, error) {
 			return tdx.DialDefault(tdx.WithRedial())
 		},
 	}
+	// 尽早安装 tdx.DefaultCodes：只要有 ETF 进入报价链路，
+	// tdx 库就会调用它做价格换算，未安装会让整批报价失败。
+	provider.ensureCodesInstalled()
+	return provider
 }
 
-func (p *tdxMarketProvider) FetchStockDataWithOrderBook(codes ...string) ([]StockWithOrderBook, error) {
+// ensureCodesInstalled 把自维护的目录实现安装到 tdx.DefaultCodes。
+//
+// tdx 库是全局单例，这里只在首次调用时写入一次。
+// 安装本身不依赖网络，权威目录在后台异步加载，因此不会阻塞首次行情请求。
+func (p *tdxMarketProvider) ensureCodesInstalled() {
+	if p.codesInstalled.Load() {
+		return
+	}
+	p.codesMu.Lock()
+	defer p.codesMu.Unlock()
+	if p.codesInstalled.Load() {
+		return
+	}
+	tdx.DefaultCodes = p.codes
+	p.codesInstalled.Store(true)
+	go p.refreshCodeCatalog()
+}
+
+// refreshCodeCatalog 加载权威代码目录（Decimal 等）。
+//
+// 优先读本地缓存；缓存缺失或过期时向 TDX 拉取全量目录并落盘。
+// 该过程在后台执行，失败不影响行情主链路 —— 规则兜底已能覆盖 ETF 与指数。
+func (p *tdxMarketProvider) refreshCodeCatalog() {
+	if p.codeCatalogReady.Load() {
+		return
+	}
+	p.codesMu.Lock()
+	defer p.codesMu.Unlock()
+	if p.codeCatalogReady.Load() {
+		return
+	}
+
+	if cache, err := p.loadCodeCatalogCache(); err == nil && len(cache.Entries) > 0 && time.Since(cache.UpdatedAt) < p.cacheTTL {
+		p.codes.setEntries(cache.Entries)
+		p.codeCatalogReady.Store(true)
+		return
+	}
+
+	entries, err := p.fetchCodeCatalogFromTDX()
+	if err != nil {
+		log.Warn("加载 TDX 代码目录失败，将使用规则兜底推断 Decimal: %v", err)
+		return
+	}
+	p.codes.setEntries(entries)
+	p.codeCatalogReady.Store(true)
+	p.saveCodeCatalogCache(entries)
+}
+
+// fetchCodeCatalogFromTDX 拉取 TDX 全量目录，返回 symbol -> 目录条目。
+func (p *tdxMarketProvider) fetchCodeCatalogFromTDX() (map[string]tdxCodeEntry, error) {
 	cli, err := p.getClient()
 	if err != nil {
 		return nil, err
 	}
 
-	quotes, err := cli.GetQuote(codes...)
+	entries := make(map[string]tdxCodeEntry, 60000)
+	for _, exchange := range []protocol.Exchange{protocol.ExchangeSH, protocol.ExchangeSZ, protocol.ExchangeBJ} {
+		resp, err := cli.GetCodeAll(exchange)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range resp.List {
+			symbol := exchange.String() + item.Code
+			entries[symbol] = tdxCodeEntry{
+				Name:     strings.TrimSpace(item.Name),
+				Code:     item.Code,
+				Exchange: exchange.String(),
+				Multiple: item.Multiple,
+				Decimal:  item.Decimal,
+			}
+		}
+	}
+	return entries, nil
+}
+
+func (p *tdxMarketProvider) loadCodeCatalogCache() (*tdxCodeCatalogCache, error) {
+	data, err := os.ReadFile(p.codeCatalogPath)
 	if err != nil {
 		return nil, err
 	}
+	var cache tdxCodeCatalogCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, err
+	}
+	return &cache, nil
+}
+
+func (p *tdxMarketProvider) saveCodeCatalogCache(entries map[string]tdxCodeEntry) {
+	cache := tdxCodeCatalogCache{
+		UpdatedAt: time.Now(),
+		Entries:   entries,
+	}
+	data, err := json.Marshal(cache)
+	if err != nil {
+		log.Warn("保存 TDX 代码目录缓存失败: %v", err)
+		return
+	}
+	if err := os.WriteFile(p.codeCatalogPath, data, 0644); err != nil {
+		log.Warn("写入 TDX 代码目录缓存失败: %v", err)
+	}
+}
+
+// tdx 报价合理区间。
+//
+// TDX 价格字段的换算错误（例如 Decimal 取错导致 ETF 价格被放大 10 倍）
+// 会产生量级明显异常的数值。必须在返回前拦截，否则会把错价推到前端与 AI 工具。
+// 上界 10000 覆盖了沪市价格最高的 ETF（货币 ETF 约 100 元）与全部个股；
+// 下界取 0 是因为停牌或无成交时价格合法地为 0。
+const (
+	tdxMinPlausiblePrice = 0.0
+	tdxMaxPlausiblePrice = 10000.0
+)
+
+// isPlausibleQuotePrice 判断价格是否在合理区间内。
+func isPlausibleQuotePrice(price float64) bool {
+	return price >= tdxMinPlausiblePrice && price <= tdxMaxPlausiblePrice
+}
+
+func (p *tdxMarketProvider) FetchStockDataWithOrderBook(codes ...string) ([]StockWithOrderBook, error) {
+	// tdx 库在报价非个股时需要 DefaultCodes 做价格换算，未安装会让整批失败。
+	p.ensureCodesInstalled()
+
+	cli, err := p.getClient()
+	if err != nil {
+		return nil, err
+	}
+
+	// 个股与场内基金必须分组请求。
+	// tdx 库的 GetQuote 是全有全无的：只要有一个代码无法解析（目录缺失、
+	// Decimal 未知等），整个调用就返回错误，同批次的正常个股会一起失败。
+	// 分组后两类互不影响，组内再由 fetchQuotesResilient 逐个降级兜底。
+	stockCodes := make([]string, 0, len(codes))
+	fundCodes := make([]string, 0, len(codes))
+	for _, code := range codes {
+		if protocol.IsStock(code) {
+			stockCodes = append(stockCodes, code)
+		} else {
+			fundCodes = append(fundCodes, code)
+		}
+	}
+
+	quotes := make(protocol.QuotesResp, 0, len(codes))
+	quotes = append(quotes, p.fetchQuotesResilient(cli, stockCodes)...)
+	quotes = append(quotes, p.fetchQuotesResilient(cli, fundCodes)...)
 
 	if len(quotes) == 0 {
 		return nil, errors.New("tdx returned empty quote data")
@@ -74,6 +236,14 @@ func (p *tdxMarketProvider) FetchStockDataWithOrderBook(codes ...string) ([]Stoc
 		symbol := quote.Exchange.String() + quote.Code
 		price := quote.K.Close.Float64()
 		preClose := quote.K.Last.Float64()
+
+		// 价格合理性校验：换算失败时宁可丢弃该代码（由上层用兜底源补齐），
+		// 也绝不把错值返回出去。
+		if !isPlausibleQuotePrice(price) || !isPlausibleQuotePrice(preClose) {
+			log.Warn("TDX 报价价格异常，已丢弃 %s: price=%v preClose=%v（疑似 Decimal 换算错误）", symbol, price, preClose)
+			continue
+		}
+
 		change := price - preClose
 		changePercent := 0.0
 		if preClose > 0 {
@@ -100,8 +270,15 @@ func (p *tdxMarketProvider) FetchStockDataWithOrderBook(codes ...string) ([]Stoc
 			if level.Price <= 0 {
 				continue
 			}
+			price := level.Price.Float64()
+			if !isPlausibleQuotePrice(price) {
+				price = 0
+			}
+			if price <= 0 {
+				continue
+			}
 			bids = append(bids, models.OrderBookItem{
-				Price: level.Price.Float64(),
+				Price: price,
 				Size:  int64(level.Number),
 			})
 		}
@@ -109,8 +286,15 @@ func (p *tdxMarketProvider) FetchStockDataWithOrderBook(codes ...string) ([]Stoc
 			if level.Price <= 0 {
 				continue
 			}
+			price := level.Price.Float64()
+			if !isPlausibleQuotePrice(price) {
+				price = 0
+			}
+			if price <= 0 {
+				continue
+			}
 			asks = append(asks, models.OrderBookItem{
-				Price: level.Price.Float64(),
+				Price: price,
 				Size:  int64(level.Number),
 			})
 		}
@@ -125,6 +309,38 @@ func (p *tdxMarketProvider) FetchStockDataWithOrderBook(codes ...string) ([]Stoc
 	}
 
 	return stocks, nil
+}
+
+// fetchQuotesResilient 批量取报价，失败时降级为逐个请求。
+//
+// tdx 库的 GetQuote 是全有全无的：一个坏代码会让整批返回错误。
+// 这里保证单个坏代码最多影响它自己，同批次的其他代码仍能拿到数据。
+func (p *tdxMarketProvider) fetchQuotesResilient(cli tdxClient, codes []string) protocol.QuotesResp {
+	if len(codes) == 0 {
+		return nil
+	}
+
+	quotes, err := cli.GetQuote(codes...)
+	if err == nil && len(quotes) == len(codes) {
+		return quotes
+	}
+
+	if len(codes) == 1 {
+		log.Warn("TDX 获取报价失败 %v: %v", codes[0], err)
+		return nil
+	}
+
+	log.Warn("TDX 批量获取报价失败（%d 个代码），降级为逐个请求: %v", len(codes), err)
+	var result protocol.QuotesResp
+	for _, code := range codes {
+		single, singleErr := cli.GetQuote(code)
+		if singleErr != nil {
+			log.Warn("TDX 获取报价失败 %v: %v", code, singleErr)
+			continue
+		}
+		result = append(result, single...)
+	}
+	return result
 }
 
 func (p *tdxMarketProvider) FetchKLineData(code string, period string, days int) ([]models.KLineData, error) {
@@ -347,7 +563,7 @@ func (p *tdxMarketProvider) fetchCatalogFromTDX() ([]StockSearchResult, error) {
 		return nil, err
 	}
 
-	results := make([]StockSearchResult, 0, 6000)
+	results := make([]StockSearchResult, 0, 8000)
 	for _, exchange := range []protocol.Exchange{protocol.ExchangeSH, protocol.ExchangeSZ, protocol.ExchangeBJ} {
 		resp, err := cli.GetCodeAll(exchange)
 		if err != nil {
@@ -355,7 +571,10 @@ func (p *tdxMarketProvider) fetchCatalogFromTDX() ([]StockSearchResult, error) {
 		}
 		for _, item := range resp.List {
 			symbol := exchange.String() + item.Code
-			if !protocol.IsStock(symbol) {
+			// 场内基金（ETF/LOF）一并纳入搜索目录。
+			// 注意 TDX 目录里 ETF 的名称是简称（如 sh510300 叫 "300ETF"），
+			// 展示用的全名由 M3 用新浪/腾讯的全名覆盖，这里先保证能被搜到。
+			if !protocol.IsStock(symbol) && !protocol.IsETF(symbol) {
 				continue
 			}
 			results = append(results, StockSearchResult{

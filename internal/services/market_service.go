@@ -109,6 +109,9 @@ type MarketService struct {
 	client           *http.Client
 	primaryProvider  marketProvider
 	fallbackProvider marketProvider
+	// providers 按优先级排列的行情源链：TDX → 腾讯 → 新浪。
+	// 为空时退回 primary/fallback 二元逻辑。
+	providers []marketProvider
 
 	// 股票数据缓存
 	cache    map[string]*stockCache
@@ -122,10 +125,17 @@ type MarketService struct {
 }
 
 // NewMarketService 创建市场数据服务
+// 行情源按优先级组成三级链：TDX（低延迟）→ 腾讯（字段最全）→ 新浪（最快兜底）。
+// TDX 正常时行为与接入腾讯前一致。
 func NewMarketService() *MarketService {
 	ms := newMarketService()
 	ms.primaryProvider = newTDXMarketProvider()
 	ms.fallbackProvider = newSinaMarketProvider(ms)
+	ms.providers = []marketProvider{
+		ms.primaryProvider,
+		newTencentMarketProvider(ms),
+		ms.fallbackProvider,
+	}
 	return ms
 }
 

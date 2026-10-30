@@ -312,3 +312,87 @@ export interface F10Overview {
   valuationTrend?: F10ValuationTrend;
   errors?: Record<string, string>;
 }
+
+// ===== A股 ETF 相关类型（对齐 internal/models/etf.go）=====
+
+// ETF 实时行情聚合（二级市价 + IOPV + 折溢价 + 涨跌停 + T+0）
+export interface ETFQuote {
+  symbol: string;        // 带市场前缀代码，如 sh510300 / sz159915
+  name: string;
+  exchange: string;      // sh / sz
+  marketPrice: number;   // 二级市场最新价
+  preClose: number;
+  open: number;
+  high: number;
+  low: number;
+  volume: number;        // 成交量（份）
+  amount: number;        // 成交额（元）
+  change: number;        // 涨跌额
+  changePercent: number; // 涨跌幅（%）
+  iopv: number;          // 基金份额参考净值（交易所直连）
+  nav?: number;          // 单位净值（T-1，可选）
+  premiumRate: number;   // 折溢价率（%，正=溢价）
+  limitUpPrice: number;  // 涨停价
+  limitDownPrice: number;// 跌停价
+  t0Flag: boolean;       // 是否 T+0 回转交易
+  orderBook: OrderBook;  // 五档盘口
+  dateTime: string;      // 行情时间
+}
+
+// 单条净值记录（东财 lsjz）
+export interface ETFNavPoint {
+  date: string;             // yyyy-MM-dd
+  unitNav: number;          // 单位净值
+  accumNav: number;         // 累计净值
+  changePercent: number;    // 日涨跌（%）
+  subscribeStatus: string;  // 申购状态
+  redeemStatus: string;     // 赎回状态
+}
+
+// ETF 净值历史序列
+export interface ETFNavSeries {
+  code: string;
+  name: string;
+  points: ETFNavPoint[];    // 按日期升序
+}
+
+// IOPV 分时单点（仅深交所提供）
+export interface ETFIOPVPoint {
+  time: string;   // HH:MM
+  value: number;  // IOPV 值
+}
+
+// ETF 清单条目（多源合并）
+export interface ETFListEntry {
+  code: string;        // 6 位代码
+  name: string;
+  exchange: string;    // sh / sz
+  fundType: string;    // 基金类别（ETF / LOF / 不动产基金）
+  investType: string;  // 投资类别（股票基金 / 债券基金 / 其它基金 ...）
+  scaleWan: string;    // 当前规模（万份，原始字符串；沪市为空）
+  manager: string;     // 基金管理人（沪市为空）
+  listDate: string;    // 上市日期
+  t0Flag: boolean;     // 是否 T+0
+}
+
+// 分页 ETF 目录结果
+export interface ETFListResult {
+  total: number;
+  page: number;
+  size: number;
+  items: ETFListEntry[];
+}
+
+// ETF 静态画像
+export interface ETFProfile {
+  code: string;
+  name: string;
+  exchange: string;
+  fundType: string;
+  investType: string;
+  scaleWan: string;
+  manager: string;
+  listDate: string;
+  t0Flag: boolean;
+  navSeries?: ETFNavPoint[];  // 近期净值（可选）
+}

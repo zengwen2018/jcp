@@ -3,6 +3,7 @@ import { StockList } from './components/StockList';
 import { StockChartLW } from './components/StockChartLW';
 import { OrderBook as OrderBookComponent } from './components/OrderBook';
 import { F10Panel } from './components/F10Panel';
+import { ETFPanel } from './components/ETFPanel';
 import { AgentRoom } from './components/AgentRoom';
 import { SettingsDialog } from './components/SettingsDialog';
 import { PositionDialog } from './components/PositionDialog';
@@ -43,6 +44,31 @@ const LAYOUT_MAX = {
   bottomPanelHeight: 450,
 };
 
+/**
+ * 判断是否为场内 ETF 代码，用于决定是否展示"ETF 概览"入口。
+ *
+ * 前缀规则来自沪市 947 只 ETF 的全量实测分布：
+ *   - 沪市 51:449 / 56:267 / 58:151 / 52:54 / 53:14 / 55:12
+ *     其中 53 段是上证50/180/580 等宽基 ETF（如 530000 上证50ETF天弘），
+ *     55 段是科创债 ETF（如 551000 科创债）；
+ *   - 深市 15 / 16 / 18 段。
+ * 个股、指数与 LOF（501/160 段）不会命中，不影响现有 A股流程。
+ */
+const isETFCode = (symbol: string): boolean => {
+  if (!symbol) return false;
+  const lower = symbol.toLowerCase();
+  const digits = lower.replace(/^(sh|sz|bj)/, '');
+  if (digits.length !== 6) return false;
+  const prefix2 = digits.slice(0, 2);
+  if (lower.startsWith('sh')) {
+    return ['51', '52', '53', '55', '56', '58'].includes(prefix2);
+  }
+  if (lower.startsWith('sz')) {
+    return ['15', '16', '18'].includes(prefix2);
+  }
+  return false;
+};
+
 type KLineUpdateMode = 'full' | 'incremental' | 'refresh';
 
 const App: React.FC = () => {
@@ -66,6 +92,8 @@ const App: React.FC = () => {
   const [showLongHuBang, setShowLongHuBang] = useState(false);
   const [showMarketMoves, setShowMarketMoves] = useState(false);
   const [showF10, setShowF10] = useState(false);
+  // ETF 概览与 F10 互斥：二者都是替代趋势图的主面板
+  const [showETF, setShowETF] = useState(false);
   const [marketIndices, setMarketIndices] = useState<MarketIndex[]>([]);
   const [isMaximized, setIsMaximized] = useState(false);
   const [f10Overview, setF10Overview] = useState<F10Overview | null>(null);
@@ -280,10 +308,17 @@ const App: React.FC = () => {
 
   const handleShowTrend = useCallback(() => {
     setShowF10(false);
+    setShowETF(false);
   }, []);
 
   const handleShowF10 = useCallback(() => {
     setShowF10(true);
+    setShowETF(false);
+  }, []);
+
+  const handleShowETF = useCallback(() => {
+    setShowETF(true);
+    setShowF10(false);
   }, []);
 
   // 使用市场事件 Hook
@@ -427,6 +462,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     setShowF10(false);
+    setShowETF(false);
     setF10Overview(null);
     setF10Error('');
   }, [selectedSymbol]);
@@ -665,7 +701,7 @@ const App: React.FC = () => {
                 type="button"
                 onClick={handleShowTrend}
                 className={`text-xs px-2.5 py-0.5 rounded border transition-colors ${
-                  !showF10
+                  !showF10 && !showETF
                     ? 'border-accent text-accent-2 bg-accent/10'
                     : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
                 }`}
@@ -683,11 +719,28 @@ const App: React.FC = () => {
               >
                 F10 全景
               </button>
+              {isETFCode(selectedStock.symbol) ? (
+                <button
+                  type="button"
+                  onClick={handleShowETF}
+                  className={`text-xs px-2.5 py-0.5 rounded border transition-colors ${
+                    showETF
+                      ? 'border-accent text-accent-2 bg-accent/10'
+                      : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                  }`}
+                >
+                  ETF 概览
+                </button>
+              ) : null}
             </div>
           </div>
 
           <div className="flex-1 flex flex-col min-h-0">
-            {!showF10 ? (
+            {showETF ? (
+              <div className="flex-1 min-h-0 border-t fin-divider-soft overflow-hidden">
+                <ETFPanel code={selectedStock.symbol} />
+              </div>
+            ) : !showF10 ? (
               <>
                 <div className="flex-1 p-1 relative min-h-0">
                   <StockChartLW

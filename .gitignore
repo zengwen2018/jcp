@@ -21,3 +21,6 @@ flowforge
 jcp-server
 jcp-server.exe
 *.log
+
+# Python 缓存（文档校验脚本产物）
+__pycache__/

@@ -49,6 +49,7 @@ type App struct {
 	f10Service        *services.F10Service
 	hotTrendService   *hottrend.HotTrendService
 	longHuBangService *services.LongHuBangService
+	etfService        *services.ETFService
 	marketPusher      *services.MarketDataPusher
 	meetingService    *meeting.Service
 	sessionService    *services.SessionService
@@ -125,8 +126,11 @@ func NewAppWithDeps(bus eventbus.EventBus, desktop platform.Desktop) *App {
 	// 初始化龙虎榜服务
 	longHuBangService := services.NewLongHuBangService()
 
+	// 初始化 ETF 聚合服务（行情聚合 + 净值 + 清单）
+	etfService := services.NewETFService()
+
 	// 初始化工具注册中心
-	toolRegistry := tools.NewRegistry(marketService, newsService, configService, researchReportService, f10Service, hotTrendSvc, longHuBangService)
+	toolRegistry := tools.NewRegistry(marketService, newsService, configService, researchReportService, f10Service, hotTrendSvc, longHuBangService, etfService)
 
 	// 初始化 MCP 管理器
 	mcpManager := mcp.NewManager()
@@ -223,6 +227,7 @@ func NewAppWithDeps(bus eventbus.EventBus, desktop platform.Desktop) *App {
 		f10Service:          f10Service,
 		hotTrendService:     hotTrendSvc,
 		longHuBangService:   longHuBangService,
+		etfService:          etfService,
 		meetingService:      meetingService,
 		sessionService:      sessionService,
 		strategyService:     strategyService,
@@ -552,6 +557,49 @@ func (a *App) getAIConfigByID(aiConfigID string) *models.AIConfig {
 	}
 	// 找不到则返回默认配置
 	return a.getDefaultAIConfig(config)
+}
+
+// ===== A股 ETF 绑定方法 =====
+// 对应 internal/webapi/routes.go 中 /api/etf/* 的 5 条路由。
+
+// GetETFQuote 批量获取 A股 ETF 实时行情（市价 + IOPV + 折溢价 + 涨跌停 + T+0）。
+func (a *App) GetETFQuote(codes []string) []models.ETFQuote {
+	return a.etfService.GetQuote(codes)
+}
+
+// GetETFIOPVSeries 获取 ETF 的 IOPV 分时序列（仅深交所提供，沪市返回空）。
+func (a *App) GetETFIOPVSeries(code string) []models.ETFIOPVPoint {
+	return a.etfService.GetIOPVSeries(code)
+}
+
+// GetETFNav 获取 ETF 净值历史序列（东财 lsjz，按日期升序）。
+func (a *App) GetETFNav(code string, days int) *models.ETFNavSeries {
+	series, err := a.etfService.GetNav(code, days)
+	if err != nil {
+		log.Warn("ETF 净值获取失败 %s: %v", code, err)
+		return nil
+	}
+	return series
+}
+
+// GetETFProfile 获取 ETF 静态画像（规模/管理人/分类/上市日 + 近期净值）。
+func (a *App) GetETFProfile(code string) *models.ETFProfile {
+	prof, err := a.etfService.GetProfile(code)
+	if err != nil {
+		log.Warn("ETF 画像获取失败 %s: %v", code, err)
+		return nil
+	}
+	return prof
+}
+
+// GetETFList 分页获取合并后的 ETF 目录（支持关键词搜索 + 分类筛选）。
+func (a *App) GetETFList(page, size int, keyword, category string) models.ETFListResult {
+	result, err := a.etfService.GetList(page, size, keyword, category)
+	if err != nil {
+		log.Warn("ETF 清单获取失败: %v", err)
+		return models.ETFListResult{}
+	}
+	return result
 }
 
 // ========== Session API ==========

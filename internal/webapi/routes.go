@@ -30,6 +30,13 @@ func Routes() []Route {
 		{Method: "GetTradeDates", Path: "/api/market/tradedates", Args: []Arg{Q("days")}},
 		{Method: "GetTradingSchedule", Path: "/api/market/schedule"},
 
+		// ---------- ETF ----------
+		{Method: "GetETFQuote", Path: "/api/etf/quote", Args: []Arg{Q("codes")}},
+		{Method: "GetETFIOPVSeries", Path: "/api/etf/iopv-series", Args: []Arg{Q("code")}},
+		{Method: "GetETFNav", Path: "/api/etf/nav", Args: []Arg{Q("code"), Q("days")}},
+		{Method: "GetETFProfile", Path: "/api/etf/profile", Args: []Arg{Q("code")}},
+		{Method: "GetETFList", Path: "/api/etf/list", Args: []Arg{Q("page"), Q("size"), Q("keyword"), Q("category")}},
+
 		// ---------- F10 基本面 ----------
 		{Method: "GetF10Overview", Path: "/api/f10/overview", Args: []Arg{Q("code")}},
 		{Method: "GetF10Valuation", Path: "/api/f10/valuation", Args: []Arg{Q("code")}},
