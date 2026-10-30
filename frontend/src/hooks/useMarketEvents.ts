@@ -4,12 +4,11 @@ import {
   subscribe,
   EVENT_STOCK_UPDATE,
   EVENT_ORDERBOOK_UPDATE,
-  EVENT_TELEGRAPH_UPDATE,
   EVENT_MARKET_INDICES_UPDATE,
   EVENT_KLINE_UPDATE,
 } from '../api/events';
 import { callBackend } from '../api/runtime';
-import { Stock, OrderBook, Telegraph, MarketIndex, KLineData } from '../types';
+import { Stock, OrderBook, MarketIndex, KLineData } from '../types';
 
 // K线推送数据结构
 interface KLineUpdateData {
@@ -22,7 +21,6 @@ interface KLineUpdateData {
 interface UseMarketEventsOptions {
   onStockUpdate?: (stocks: Stock[]) => void;
   onOrderBookUpdate?: (orderBook: OrderBook) => void;
-  onTelegraphUpdate?: (telegraph: Telegraph) => void;
   onMarketIndicesUpdate?: (indices: MarketIndex[]) => void;
   onKLineUpdate?: (data: KLineUpdateData) => void;
 }
@@ -35,12 +33,11 @@ interface UseMarketEventsOptions {
  * 此处通过 api/events 统一订阅，调用方无需区分。
  */
 export function useMarketEvents(options: UseMarketEventsOptions) {
-  const { onStockUpdate, onOrderBookUpdate, onTelegraphUpdate, onMarketIndicesUpdate, onKLineUpdate } = options;
+  const { onStockUpdate, onOrderBookUpdate, onMarketIndicesUpdate, onKLineUpdate } = options;
 
   // 使用 ref 保存回调，避免重复注册
   const stockCallbackRef = useRef(onStockUpdate);
   const orderBookCallbackRef = useRef(onOrderBookUpdate);
-  const telegraphCallbackRef = useRef(onTelegraphUpdate);
   const marketIndicesCallbackRef = useRef(onMarketIndicesUpdate);
   const klineCallbackRef = useRef(onKLineUpdate);
 
@@ -48,10 +45,9 @@ export function useMarketEvents(options: UseMarketEventsOptions) {
   useEffect(() => {
     stockCallbackRef.current = onStockUpdate;
     orderBookCallbackRef.current = onOrderBookUpdate;
-    telegraphCallbackRef.current = onTelegraphUpdate;
     marketIndicesCallbackRef.current = onMarketIndicesUpdate;
     klineCallbackRef.current = onKLineUpdate;
-  }, [onStockUpdate, onOrderBookUpdate, onTelegraphUpdate, onMarketIndicesUpdate, onKLineUpdate]);
+  }, [onStockUpdate, onOrderBookUpdate, onMarketIndicesUpdate, onKLineUpdate]);
 
   // 注册事件监听
   useEffect(() => {
@@ -63,11 +59,6 @@ export function useMarketEvents(options: UseMarketEventsOptions) {
     // 监听盘口数据更新
     const offOrderBook = onEvent(EVENT_ORDERBOOK_UPDATE, (data) => {
       orderBookCallbackRef.current?.(data as OrderBook);
-    });
-
-    // 监听快讯数据更新
-    const offTelegraph = onEvent(EVENT_TELEGRAPH_UPDATE, (data) => {
-      telegraphCallbackRef.current?.(data as Telegraph);
     });
 
     // 监听大盘指数更新
@@ -100,7 +91,6 @@ export function useMarketEvents(options: UseMarketEventsOptions) {
     return () => {
       offStock();
       offOrderBook();
-      offTelegraph();
       offIndices();
       offKLine();
     };

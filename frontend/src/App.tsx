@@ -22,10 +22,10 @@ import { getOrCreateSession, StockSession, updateStockPosition } from './service
 import { getConfig, updateConfig } from './services/configService';
 import { useMarketEvents } from './hooks/useMarketEvents';
 import { useMarketStatus } from './hooks/useMarketStatus';
-import { Stock, KLineData, OrderBook, TimePeriod, Telegraph, MarketIndex, F10Overview } from './types';
-import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp, BarChart3, Activity } from 'lucide-react';
+import { Stock, KLineData, OrderBook, TimePeriod, MarketIndex, F10Overview } from './types';
+import { Settings, Minus, Square, X, Copy, Briefcase, TrendingUp, BarChart3, Activity } from 'lucide-react';
 import logo from './assets/images/logo.png';
-import { callBackend, windowMinimize, windowMaximize, windowClose, windowSetSize, windowGetSize, windowIsMaximised, openURL } from './api/runtime';
+import { windowMinimize, windowMaximize, windowClose, windowSetSize, windowGetSize, windowIsMaximised } from './api/runtime';
 
 // 布局配置常量
 const LAYOUT_DEFAULTS = {
@@ -81,10 +81,6 @@ const App: React.FC = () => {
   const [kLineData, setKLineData] = useState<KLineData[]>([]);
   const [kLineUpdateMode, setKLineUpdateMode] = useState<KLineUpdateMode>('full');
   const [orderBook, setOrderBook] = useState<OrderBook>({ bids: [], asks: [] });
-  const [marketMessage, setMarketMessage] = useState<string>('市场数据加载中...');
-  const [telegraphList, setTelegraphList] = useState<Telegraph[]>([]);
-  const [showTelegraphList, setShowTelegraphList] = useState(false);
-  const [telegraphLoading, setTelegraphLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [showPosition, setShowPosition] = useState(false);
@@ -129,13 +125,6 @@ const App: React.FC = () => {
   // 处理盘口数据更新（来自后端推送）
   const handleOrderBookUpdate = useCallback((data: OrderBook) => {
     setOrderBook(data);
-  }, []);
-
-  // 处理快讯数据更新（来自后端推送）
-  const handleTelegraphUpdate = useCallback((data: Telegraph) => {
-    if (data && data.content) {
-      setMarketMessage(`[${data.time}] ${data.content}`);
-    }
   }, []);
 
   // 处理大盘指数更新（来自后端推送）
@@ -267,30 +256,6 @@ const App: React.FC = () => {
     };
   }, [leftPanelWidth, rightPanelWidth, bottomPanelHeight, saveLayoutConfig]);
 
-  // 获取快讯列表
-  const handleShowTelegraphList = async () => {
-    if (!showTelegraphList) {
-      setShowTelegraphList(true);
-      setTelegraphLoading(true);
-      try {
-        const list = await callBackend<any[]>('GetTelegraphList', '/api/telegraph');
-        setTelegraphList(list || []);
-      } finally {
-        setTelegraphLoading(false);
-      }
-    } else {
-      setShowTelegraphList(false);
-    }
-  };
-
-  // 打开快讯链接
-  const handleOpenTelegraph = (telegraph: Telegraph) => {
-    if (telegraph.url) {
-      openURL(telegraph.url);
-    }
-    setShowTelegraphList(false);
-  };
-
   const fetchSelectedF10 = useCallback(async (symbol: string) => {
     if (!symbol) return;
     setF10Loading(true);
@@ -325,7 +290,6 @@ const App: React.FC = () => {
   const { subscribeOrderBook, subscribeKLine } = useMarketEvents({
     onStockUpdate: handleStockUpdate,
     onOrderBookUpdate: handleOrderBookUpdate,
-    onTelegraphUpdate: handleTelegraphUpdate,
     onMarketIndicesUpdate: handleMarketIndicesUpdate,
     onKLineUpdate: handleKLineUpdate,
   });
@@ -405,12 +369,6 @@ const App: React.FC = () => {
           // 加载第一个股票的Session
           const session = await getOrCreateSession(list[0].symbol, list[0].name);
           setCurrentSession(session);
-        }
-        // 主动获取一次快讯数据（解决启动时后端推送早于前端监听注册的时序问题）
-        const telegraphs = await callBackend<any[]>('GetTelegraphList', '/api/telegraph');
-        if (telegraphs && telegraphs.length > 0) {
-          const latest = telegraphs[0];
-          setMarketMessage(`[${latest.time}] ${latest.content}`);
         }
       } catch (err) {
         console.error('Failed to load watchlist:', err);
@@ -502,50 +460,6 @@ const App: React.FC = () => {
         <div className="flex items-center gap-2" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
           <img src={logo} alt="logo" className="h-8 w-8 rounded-lg" />
           <span className={`font-bold text-lg tracking-tight ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>韭菜盘 <span className="text-accent-2">AI</span></span>
-        </div>
-        
-        <div className="flex items-center gap-4 fin-panel-soft px-4 py-1.5 rounded-full border fin-divider relative" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
-          <Radio className="h-3 w-3 animate-pulse text-accent-2" />
-          <span className={`text-xs font-mono w-96 truncate text-center ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-            实时快讯: {marketMessage}
-          </span>
-          <button
-            onClick={handleShowTelegraphList}
-            className={`p-1 rounded transition-colors ${colors.isDark ? 'hover:bg-slate-700/50 text-slate-400' : 'hover:bg-slate-200/50 text-slate-500'} hover:text-accent-2`}
-            title="查看快讯列表"
-          >
-            <List className="h-4 w-4" />
-          </button>
-
-          {/* 快讯下拉列表 */}
-          {showTelegraphList && (
-            <div
-              className="absolute top-full left-0 right-0 mt-2 fin-panel border fin-divider rounded-lg shadow-xl z-50 max-h-96 overflow-y-auto fin-scrollbar text-left"
-              onMouseLeave={() => setShowTelegraphList(false)}
-            >
-              <div className={`p-2 border-b fin-divider text-xs font-medium ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                财联社快讯
-              </div>
-              {telegraphLoading ? (
-                <div className={`p-4 text-center text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>加载中...</div>
-              ) : telegraphList.length === 0 ? (
-                <div className={`p-4 text-center text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>暂无快讯</div>
-              ) : (
-                telegraphList.map((tg, idx) => (
-                  <div
-                    key={idx}
-                    onClick={() => handleOpenTelegraph(tg)}
-                    className={`p-3 border-b fin-divider last:border-b-0 cursor-pointer transition-colors ${colors.isDark ? 'hover:bg-slate-800/50' : 'hover:bg-slate-100/80'}`}
-                  >
-                    <div className="flex items-start gap-2">
-                      <span className="text-xs text-accent-2 font-mono shrink-0">{tg.time}</span>
-                      <span className={`text-xs line-clamp-2 ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>{tg.content}</span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
         </div>
 
         <div className="flex items-center gap-3" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
