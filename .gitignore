@@ -15,3 +15,9 @@ scripts
 .flowforge
 .workflow
 flowforge
+
+# 构建产物（Web 模式）
+# 注：jcp-server 是 63MB 的 Linux 部署二进制，绝不能进版本历史
+jcp-server
+jcp-server.exe
+*.log
