@@ -26,6 +26,15 @@ import sys
 
 DOCS = 'docs'
 
+
+def doc_files():
+    """返回全部文档文件（递归包含子目录）。
+
+    必须递归：docs/etf/ 等子目录下的文档同样需要校验，
+    否则新增的文档会游离在守门脚本之外。
+    """
+    return sorted(glob.glob(os.path.join(DOCS, '**', '*.md'), recursive=True))
+
 # ══════════════════════════════════════════════════════════
 # 1 & 2. 语义断言表
 #    每条 = (说明, 代码侧判定函数, 文档侧判定函数)
@@ -181,7 +190,7 @@ def main():
     # ---- 3. 数量断言 ----
     print('\n【2】文档中的数量断言')
     doc_all = ''
-    for f in glob.glob(os.path.join(DOCS, '*.md')):
+    for f in doc_files():
         doc_all += io.open(f, encoding='utf-8').read()
 
     for name, actual, doc_patterns in count_assertions():
@@ -205,10 +214,13 @@ def main():
     # ---- 4. 链接 ----
     print('\n【3】文档间链接')
     bad_link = 0
-    for f in glob.glob(os.path.join(DOCS, '*.md')):
+    for f in doc_files():
         s = io.open(f, encoding='utf-8').read()
+        base_dir = os.path.dirname(f)
         for m in re.finditer(r'\[([^\]]+)\]\(([^)#]+\.md)(#[^)]*)?\)', s):
-            if not os.path.exists(os.path.join(DOCS, m.group(2))):
+            # 链接目标相对于当前文档所在目录解析（支持子目录间互链）
+            target = os.path.normpath(os.path.join(base_dir, m.group(2)))
+            if not os.path.exists(target):
                 errors.append('%s -> %s：目标文件不存在' % (os.path.basename(f), m.group(2)))
                 bad_link += 1
     print('  %s 文件链接' % ('✗ %d 处失效' % bad_link if bad_link else '✓ 全部有效'))
@@ -221,13 +233,13 @@ def main():
         return re.sub(r'\s+', '-', t)
 
     anchors = {}
-    for f in glob.glob(os.path.join(DOCS, '*.md')):
+    for f in doc_files():
         s = io.open(f, encoding='utf-8').read()
         anchors[os.path.basename(f)] = {
             slug(m.group(1)) for m in re.finditer(r'^#{2,4}\s+(.+)$', s, re.M)
         }
     bad_anchor = 0
-    for f in glob.glob(os.path.join(DOCS, '*.md')):
+    for f in doc_files():
         s = io.open(f, encoding='utf-8').read()
         for m in re.finditer(r'\[([^\]]+)\]\(([^)#]+\.md)#([^)]+)\)', s):
             base, anc = os.path.basename(m.group(2)), m.group(3)
@@ -239,7 +251,7 @@ def main():
     # ---- 6. 代码块闭合 ----
     print('\n【5】Markdown 代码块闭合')
     bad_block = 0
-    for f in sorted(glob.glob(os.path.join(DOCS, '*.md'))):
+    for f in sorted(doc_files()):
         s = io.open(f, encoding='utf-8').read()
         n = s.count('```')
         if n % 2 != 0:
