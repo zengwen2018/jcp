@@ -202,8 +202,24 @@ type ETFProfile struct {
 	// IndustryWeights    []IndustryWeight    `json:"industryWeights,omitempty"`
 
 	// ---- 交易规则 ----
-	// 境内股票ETF = T+1；跨境/债券/黄金/货币/商品ETF = T+0（裁决 D-10）
+	// 境内股票ETF = T+1；跨境/债券/黄金/货币/商品ETF = T+0（裁决 D-10/D-17）
 	T0Tradable bool `json:"t0Tradable"`
+	// T0Basis 记录 T+0 的判定依据，便于审计。
+	// 取值：szse_tzlb（深交所投资类别，官方）/ code_rule（代码段规则）/
+	//       tencent_qdii（腾讯 smartbox QDII-ETF 标记）
+	// ⚠️ 深交所 data.groupId 不可用于判定 —— 实测所有 ETF 都是 8（裁决 D-17）。
+	T0Basis string `json:"t0Basis,omitempty"`
+
+	// ---- 涨跌停（腾讯 field[47]/[48]，源站已按 10%/20% 正确区分，裁决 D-18）----
+	LimitUpPrice   float64 `json:"limitUpPrice,omitempty"`
+	LimitDownPrice float64 `json:"limitDownPrice,omitempty"`
+	PriceLimitPct  float64 `json:"priceLimitPercent,omitempty"` // %，如 10 或 20
+
+	// ---- 分类（深交所 CATALOGID=1105，裁决 D-16/D-17）----
+	// ETFCategory 基金类别 jjlb：ETF / LOF / 不动产基金
+	ETFCategory string `json:"etfCategory,omitempty"`
+	// InvestCategory 投资类别 tzlb 六类，是 T+0 判定的官方依据
+	InvestCategory string `json:"investCategory,omitempty"`
 
 	// ---- 源标识 ----
 	IOPVSource string `json:"iopvSource,omitempty"` // sse / szse

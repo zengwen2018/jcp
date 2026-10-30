@@ -402,7 +402,20 @@ const (
 | 代码段 | `sh5xxxxx` / `sz15xxxx` / `sh51xxxx` 等 → ETF 候选（须与 `groupId`/F10 交叉确认） |
 | 名称后缀 | 名称含「ETF」/「LOF」/「联接」→ 辅助判定，**不单独作为依据** |
 
-> **裁决 D-10**：`t0Tradable` 判定来源优先级 —— ① 深交所 `data.groupId` → ② 东财 pingzhongdata 基金类型字段 → ③ 名称/代码段规则兜底。**具体规则待工程侧实测确认后写死，不靠猜测。**
+> **裁决 D-10（已按实测修订，见 D-17）**：
+> `t0Tradable` 判定来源优先级 —— ① **深交所 `tzlb` 投资类别**（唯一官方依据）
+> → ② 沪市用「代码段规则 + 腾讯 smartbox `QDII-ETF` 标记」
+> → ③ 人工例外名册（沪市 55xxx 等 12 只边界情况）。
+>
+> ⚠️ **深交所 `data.groupId` 完全不可用** —— 实测**所有 ETF 都是 8**，
+> 它只说明「是 ETF」，不区分境内/跨境/债券/商品。
+>
+> **必须记录判定依据** —— `ETFProfile` 增加 `t0Basis string` 字段
+> （取值 `szse_tzlb` / `code_rule` / `tencent_qdii`），便于审计。
+>
+> 深交所 `tzlb` 六类与 T+0 对应（实测 1083 只全量分类）：
+> 股票基金 797（T+1）/ 混合基金 101（T+1）/ **其它基金(跨境QDII) 81（T+0）**
+> / **债券基金 70（T+0）** / **ABS(REITs) 31（T+0）** / **货币市场基金 3（T+0）**
 
 ---
 
@@ -514,7 +527,7 @@ type TradingCalendar interface {
 
 ### ETF 特有
 
-`iopv, nav, accNav, navDate, premiumRate, closePremiumRate, premiumRatePercentile, premiumRateHistory, iopvHistory, fundScale, shareCount, inceptionDate, trackingIndexCode, trackingIndexName, managerName, fundManagerName, managementFee, custodyFee, replicationStrategy, trackingError, annualTrackingDeviation, trackingErrorWindow, trackingErrorStdType, holdingsCount, top10Weight, equityPosition, constituentWeights[], industryWeights[], t0Tradable`
+`iopv, nav, accNav, navDate, premiumRate, closePremiumRate, premiumRatePercentile, premiumRateHistory, iopvHistory, fundScale, shareCount, inceptionDate, trackingIndexCode, trackingIndexName, managerName, fundManagerName, managementFee, custodyFee, replicationStrategy, trackingError, annualTrackingDeviation, trackingErrorWindow, trackingErrorStdType, holdingsCount, top10Weight, equityPosition, constituentWeights[], industryWeights[], t0Tradable, t0Basis, limitUpPrice, limitDownPrice, priceLimitPercent, etfCategory, investCategory`
 
 ### 指数特有
 
@@ -605,7 +618,13 @@ type TradingCalendar interface {
 | equityPosition | float64 | equityPosition | 股票占净值比 | % | `Data_fundSharesPositions` 末值 | 季 | 是 |
 | constituentWeights | []ConstituentWeight | constituentWeights | 成分股权重明细 | % | 定期报告/F10 | 季 | 剔除（权重不可得） |
 | industryWeights | []IndustryWeight | industryWeights | 行业分布 | % | 定期报告/F10 | 季 | 剔除（需 F10） |
-| t0Tradable | bool | t0Tradable | 是否支持T+0回转交易 | bool | 跨境/债券/黄金/货币/商品ETF=true；境内股票ETF=false（D-10） | 静态 | 是 |
+| t0Tradable | bool | t0Tradable | 是否支持T+0回转交易 | bool | 跨境/债券/黄金/货币/商品ETF=true；境内股票ETF=false（D-10/D-17） | 静态 | 是 |
+| t0Basis | string | t0Basis | T+0判定依据 | 枚举 | szse_tzlb / code_rule / tencent_qdii | 静态 | 否 |
+| limitUpPrice | float64 | limitUpPrice | 涨停价 | 货币 | 腾讯 field[47]（已按10%/20%区分） | 实时 | 否 |
+| limitDownPrice | float64 | limitDownPrice | 跌停价 | 货币 | 腾讯 field[48] | 实时 | 否 |
+| priceLimitPercent | float64 | priceLimitPercent | 涨跌幅限制 | % | (涨停-跌停)/昨收×200（源站已算好） | 实时 | 否 |
+| etfCategory | string | etfCategory | 基金类别 | 枚举 | 深交所 jjlb：ETF/LOF/不动产基金 | 日 | 否 |
+| investCategory | string | investCategory | 投资类别 | 枚举 | 深交所 tzlb 六类（D-17 T+0 依据） | 日 | 是 |
 
 ```go
 type ConstituentWeight struct {
